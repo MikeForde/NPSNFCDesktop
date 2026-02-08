@@ -1,0 +1,1 @@
+JDK=/home/mikeforde/.jdks/corretto-24.0.2 composeApp/tools/build-smartcardio-jar.sh
