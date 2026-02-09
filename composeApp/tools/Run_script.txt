@@ -1,1 +1,12 @@
+Run scripts from Android Studio terminal (project root position)
+
+
+// PopOS version - tested
+chmod +x composeApp/tools/build-smartcardio-jar.sh
 JDK=/home/mikeforde/.jdks/corretto-24.0.2 composeApp/tools/build-smartcardio-jar.sh
+
+
+// Universal version (Linux and Mac) - untested
+chmod +x composeApp/tools/build-smartcardio-jar-uni.sh
+
+composeApp/tools/build-smartcardio-jar.sh
