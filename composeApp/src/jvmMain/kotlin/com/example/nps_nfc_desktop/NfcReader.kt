@@ -1,75 +1,141 @@
 package com.example.nps_nfc_desktop
 
-import java.util.concurrent.atomic.AtomicBoolean
-import javax.smartcardio.CardTerminal
-import javax.smartcardio.CommandAPDU
-import javax.smartcardio.TerminalFactory
+import java.security.Provider
+import java.security.Security
+import javax.smartcardio.*
 
 class NfcReader {
 
-    private val running = AtomicBoolean(false)
+    data class ReaderInfo(
+        val name: String
+    )
 
-    fun listReaders(): List<CardTerminal> =
-        TerminalFactory.getDefault().terminals().list()
+    class CardSession(
+        val readerName: String,
+        private val card: Card
+    ) {
+        val protocol: String
+            get() = try {
+                card.protocol
+            } catch (_: Exception) {
+                "(unknown)"
+            }
 
-    /**
-     * Blocks waiting for cards and calls onUid each time a card is presented.
-     * Call stop() to exit.
-     */
-    fun runUidLoop(onStatus: (String) -> Unit, onUid: (String) -> Unit) {
-        running.set(true)
+        val atrHex: String?
+            get() = try {
+                card.atr?.bytes?.toHex()
+            } catch (_: Exception) {
+                null
+            }
 
-        val terminals = TerminalFactory.getDefault().terminals()
-        val readers = terminals.list()
+        fun transmit(apdu: ByteArray): ResponseAPDU {
+            return card.basicChannel.transmit(CommandAPDU(apdu))
+        }
 
-        if (readers.isEmpty()) {
-            onStatus("No PC/SC readers found. Is pcscd running? Is the ACS driver installed?")
-            running.set(false)
+        fun disconnect(reset: Boolean = false) {
+            try {
+                card.disconnect(reset)
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    private fun ensurePcscProvider(onStatus: (String) -> Unit) {
+        val existing = Security.getProvider("SunPCSC")
+        if (existing != null) {
+            onStatus("Provider already present: ${existing.name}")
             return
         }
 
-        onStatus("Readers: " + readers.joinToString { it.name })
-        val reader = readers.first()
-        onStatus("Using: ${reader.name}. Tap a card...")
+        try {
+            val clazz = Class.forName("sun.security.smartcardio.SunPCSC")
+            val provider = clazz.getDeclaredConstructor().newInstance() as Provider
+            Security.addProvider(provider)
+            onStatus("Registered provider: ${provider.name}")
+        } catch (e: Exception) {
+            onStatus("Could not register SunPCSC: ${e::class.simpleName}: ${e.message}")
+        }
+    }
 
-        // ACR-style “Get UID” APDU (reader command)
-        val getUid = CommandAPDU(byteArrayOf(0xFF.toByte(), 0xCA.toByte(), 0x00, 0x00, 0x00))
+    private fun createPcscFactory(onStatus: (String) -> Unit): TerminalFactory? {
+        val lib = System.getProperty("sun.security.smartcardio.library")
+        onStatus("PC/SC lib: ${lib ?: "(default lookup)"}")
+        onStatus("Default factory type: ${TerminalFactory.getDefaultType()}")
 
-        while (running.get()) {
-            // Wait for a card
-            if (!reader.waitForCardPresent(250)) continue
+        ensurePcscProvider(onStatus)
 
-            try {
-                val card = reader.connect("*")
-                val channel = card.basicChannel
+        return try {
+            val factory = TerminalFactory.getInstance("PC/SC", null)
+            onStatus("Factory type in use: ${factory.type}, provider: ${factory.provider.name}")
+            factory
+        } catch (e: Exception) {
+            onStatus("PC/SC factory error: ${e::class.simpleName}: ${e.message}")
+            null
+        }
+    }
 
-                val resp = channel.transmit(getUid)
-                val data = resp.data
+    fun listReadersWithDiagnostics(onStatus: (String) -> Unit): List<ReaderInfo> {
+        val factory = createPcscFactory(onStatus) ?: return emptyList()
 
-                if (data.isNotEmpty()) {
-                    val uidHex = data.joinToString("") { "%02X".format(it) }
-                    onUid(uidHex)
-                    onStatus("Card read OK (UID $uidHex). Remove card...")
-                } else {
-                    onStatus("Card present but no UID returned.")
-                }
+        return try {
+            val readers = factory.terminals().list()
+            onStatus("Reader count: ${readers.size}")
+            readers.forEach { onStatus("Reader: ${it.name}") }
+            readers.map { ReaderInfo(it.name) }
+        } catch (e: Exception) {
+            onStatus("List terminals error: ${e::class.simpleName}: ${e.message}")
+            emptyList()
+        }
+    }
 
-                try { card.disconnect(false) } catch (_: Exception) {}
+    fun <T> withFirstCard(
+        onStatus: (String) -> Unit,
+        block: (CardSession) -> T
+    ): T {
+        val factory = createPcscFactory(onStatus)
+            ?: error("No PC/SC factory available")
 
-            } catch (e: Exception) {
-                onStatus("Read error: ${e.message}")
+        val terminals = factory.terminals().list()
+        require(terminals.isNotEmpty()) { "No PC/SC readers found by smartcardio" }
+
+        val terminal = terminals.first()
+        onStatus("Using: ${terminal.name}. Tap a card...")
+
+        while (true) {
+            if (!terminal.waitForCardPresent(250)) {
+                continue
             }
 
-            // Wait until removed (avoid repeated reads)
-            while (running.get() && reader.isCardPresent) {
-                Thread.sleep(80)
+            var card: Card? = null
+            try {
+                card = terminal.connect("*")
+                val session = CardSession(
+                    readerName = terminal.name,
+                    card = card
+                )
+                onStatus("Card connected. Protocol=${session.protocol}, ATR=${session.atrHex ?: "(none)"}")
+                val result = block(session)
+                onStatus("Operation complete. Remove card...")
+                waitForRemoval(terminal)
+                return result
+            } catch (e: Exception) {
+                onStatus("Card operation error: ${e::class.simpleName}: ${e.message}")
+                throw e
+            } finally {
+                try {
+                    card?.disconnect(false)
+                } catch (_: Exception) {
+                }
             }
         }
-
-        onStatus("Stopped NFC loop.")
     }
 
-    fun stop() {
-        running.set(false)
+    private fun waitForRemoval(terminal: CardTerminal) {
+        while (terminal.isCardPresent) {
+            Thread.sleep(80)
+        }
     }
 }
+
+private fun ByteArray.toHex(): String =
+    joinToString("") { "%02X".format(it) }
