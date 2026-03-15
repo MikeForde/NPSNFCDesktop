@@ -11,7 +11,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.runtime.*
@@ -40,11 +39,6 @@ fun App() {
             }
         }
 
-        fun clearLog() {
-            statusLines.clear()
-            statusLines.add("Idle")
-        }
-
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -62,72 +56,26 @@ fun App() {
                     onClick = {
                         scope.launch(Dispatchers.IO) {
                             try {
-                                val readers = nfcReader.listReadersWithDiagnostics { msg ->
-                                    scope.launch { log(msg) }
-                                }
-                                withContext(Dispatchers.Main) {
-                                    if (readers.isEmpty()) {
-                                        log("No readers returned by smartcardio.")
-                                    } else {
-                                        log("Readers: " + readers.joinToString { it.name })
-                                    }
-                                }
-                            } catch (e: Exception) {
-                                withContext(Dispatchers.Main) {
-                                    log("List readers error: ${e::class.simpleName}: ${e.message}")
-                                }
-                            }
-                        }
-                    }
-                ) {
-                    Text("List Readers")
-                }
-
-                Button(
-                    onClick = {
-                        scope.launch(Dispatchers.IO) {
-                            try {
-                                val inspection = service.inspectCardNative { msg ->
-                                    scope.launch { log(msg) }
-                                }
-                                withContext(Dispatchers.Main) {
-                                    cardInfoText = inspection.toDisplayText()
-                                    payloadText = buildString {
-                                        appendLine("--- NPS (E104) ---")
-                                        appendLine(inspection.nps?.decompressedText ?: "(not available)")
-                                        appendLine()
-                                        appendLine("--- EXTRA (E105) ---")
-                                        appendLine(inspection.extra?.decompressedText ?: "(not available)")
-                                    }.trim()
-                                    log("Native inspection complete.")
-                                }
-                            } catch (e: Exception) {
-                                withContext(Dispatchers.Main) {
-                                    log("Native inspect error: ${e::class.simpleName}: ${e.message}")
-                                }
-                            }
-                        }
-                    }
-                ) {
-                    Text("Inspect Native")
-                }
-
-                Button(
-                    onClick = {
-                        scope.launch(Dispatchers.IO) {
-                            try {
                                 val inspection = service.inspectCard { msg ->
                                     scope.launch { log(msg) }
                                 }
+
                                 withContext(Dispatchers.Main) {
                                     cardInfoText = inspection.toDisplayText()
                                     payloadText = buildString {
                                         appendLine("--- NPS (E104) ---")
-                                        appendLine(inspection.nps?.decompressedText ?: "(not available)")
+                                        appendLine(
+                                            inspection.nps?.decompressedText?.let(::prettyPrintJson)
+                                                ?: "(not available)"
+                                        )
                                         appendLine()
                                         appendLine("--- EXTRA (E105) ---")
-                                        appendLine(inspection.extra?.decompressedText ?: "(not available)")
+                                        appendLine(
+                                            inspection.extra?.decompressedText?.let(::prettyPrintJson)
+                                                ?: "(not available)"
+                                        )
                                     }.trim()
+
                                     log("Inspection complete.")
                                 }
                             } catch (e: Exception) {
@@ -148,10 +96,17 @@ fun App() {
                                 val parsed = service.readNps { msg ->
                                     scope.launch { log(msg) }
                                 }
+
                                 withContext(Dispatchers.Main) {
                                     payloadText = parsed.decompressedText
+                                        ?.let(::prettyPrintJson)
                                         ?: "(Payload read, but not decompressed)"
-                                    cardInfoText = "NPS MIME: ${parsed.mimeType}\nCompressed bytes: ${parsed.compressedPayload.size}"
+
+                                    cardInfoText = buildString {
+                                        appendLine("NPS MIME: ${parsed.mimeType}")
+                                        appendLine("Compressed bytes: ${parsed.compressedPayload.size}")
+                                    }.trim()
+
                                     log("NPS read complete.")
                                 }
                             } catch (e: Exception) {
@@ -172,10 +127,17 @@ fun App() {
                                 val parsed = service.readExtra { msg ->
                                     scope.launch { log(msg) }
                                 }
+
                                 withContext(Dispatchers.Main) {
                                     payloadText = parsed.decompressedText
+                                        ?.let(::prettyPrintJson)
                                         ?: "(Payload read, but not decompressed)"
-                                    cardInfoText = "EXTRA MIME: ${parsed.mimeType}\nCompressed bytes: ${parsed.compressedPayload.size}"
+
+                                    cardInfoText = buildString {
+                                        appendLine("EXTRA MIME: ${parsed.mimeType}")
+                                        appendLine("Compressed bytes: ${parsed.compressedPayload.size}")
+                                    }.trim()
+
                                     log("EXTRA read complete.")
                                 }
                             } catch (e: Exception) {
@@ -187,12 +149,6 @@ fun App() {
                     }
                 ) {
                     Text("Read EXTRA")
-                }
-
-                OutlinedButton(
-                    onClick = { clearLog() }
-                ) {
-                    Text("Clear Log")
                 }
             }
 
@@ -214,7 +170,7 @@ fun App() {
                 readOnly = true,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(260.dp)
+                    .height(320.dp)
                     .verticalScroll(rememberScrollState())
             )
 
@@ -225,9 +181,80 @@ fun App() {
                 readOnly = true,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(220.dp)
+                    .height(180.dp)
                     .verticalScroll(rememberScrollState())
             )
         }
     }
+}
+
+private fun prettyPrintJson(input: String): String {
+    val text = input.trim()
+    if (text.isEmpty()) return text
+
+    val out = StringBuilder()
+    var indent = 0
+    var inString = false
+    var escaping = false
+
+    fun appendIndent(level: Int) {
+        repeat(level) { out.append("  ") }
+    }
+
+    for (ch in text) {
+        when {
+            escaping -> {
+                out.append(ch)
+                escaping = false
+            }
+
+            ch == '\\' && inString -> {
+                out.append(ch)
+                escaping = true
+            }
+
+            ch == '"' -> {
+                out.append(ch)
+                inString = !inString
+            }
+
+            inString -> {
+                out.append(ch)
+            }
+
+            ch == '{' || ch == '[' -> {
+                out.append(ch)
+                out.append('\n')
+                indent++
+                appendIndent(indent)
+            }
+
+            ch == '}' || ch == ']' -> {
+                out.append('\n')
+                indent--
+                appendIndent(indent)
+                out.append(ch)
+            }
+
+            ch == ',' -> {
+                out.append(ch)
+                out.append('\n')
+                appendIndent(indent)
+            }
+
+            ch == ':' -> {
+                out.append(": ")
+            }
+
+            ch.isWhitespace() -> {
+                // skip original whitespace outside strings
+            }
+
+            else -> {
+                out.append(ch)
+            }
+        }
+    }
+
+    return out.toString()
 }
