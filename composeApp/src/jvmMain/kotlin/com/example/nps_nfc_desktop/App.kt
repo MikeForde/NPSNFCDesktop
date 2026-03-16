@@ -74,6 +74,10 @@ fun App() {
 
         val adminService = remember { DesfireAdminService(nfcReader) }
 
+        var pendingRebuildConfirmation by remember { mutableStateOf(false) }
+        var pendingRebuildUid by remember { mutableStateOf<String?>(null) }
+        var pendingRebuildSummary by remember { mutableStateOf("") }
+
         fun log(msg: String) {
             logLines.add(msg)
             while (logLines.size > 120) {
@@ -414,13 +418,62 @@ fun App() {
 
                 Button(
                     onClick = {
-                        startOperation("Write Full Card", "Waiting for card...")
+                        startOperation("Rebuild Card", "Waiting for card...")
                         scope.launch(Dispatchers.IO) {
                             try {
                                 require(fetchedRoJson.isNotBlank()) { "No fetched RO record available. Fetch an API record first." }
                                 require(fetchedRwJson.isNotBlank()) { "No fetched RW record available. Fetch an API record first." }
 
-                                val result = service.writeFullFormattedCard(
+                                val inspection = try {
+                                    service.inspectCard { msg ->
+                                        scope.launch { log(msg) }
+                                    }
+                                } catch (e: Exception) {
+                                    val msg = e.message ?: ""
+                                    if (msg.contains("SW=6A82")) {
+                                        null
+                                    } else {
+                                        throw e
+                                    }
+                                }
+
+                                val isBlank = inspection == null ||
+                                        inspection.state.kind == CardStateKind.BLANK_OR_UNFORMATTED
+
+                                val sameCardAwaitingConfirmation =
+                                    inspection != null &&
+                                            pendingRebuildConfirmation &&
+                                            pendingRebuildUid != null &&
+                                            pendingRebuildUid == inspection.uidHex
+
+                                if (!isBlank && !sameCardAwaitingConfirmation) {
+                                    withContext(Dispatchers.Main) {
+                                        pendingRebuildConfirmation = true
+                                        pendingRebuildUid = inspection?.uidHex
+                                        pendingRebuildSummary = buildString {
+                                            appendLine("UID: ${inspection?.uidHex ?: "(unknown)"}")
+                                            appendLine("State: ${inspection?.state?.label ?: "(unknown)"}")
+                                            appendLine("Detail: ${inspection?.state?.detail ?: "(unknown)"}")
+                                        }.trim()
+
+                                        cardInfoText = buildString {
+                                            appendLine("Rebuild confirmation required.")
+                                            appendLine()
+                                            appendLine(pendingRebuildSummary)
+                                            appendLine()
+                                            appendLine("Press 'Rebuild Card' again to overwrite this card.")
+                                        }.trim()
+
+                                        selectedTab = MainTab.CARD_INFO
+                                        operationState = OperationState.WORKING
+                                        operationTitle = "Rebuild Card"
+                                        operationMessage = "Card is not blank. Press 'Rebuild Card' again to confirm overwrite."
+                                        log("Rebuild Card: confirmation required for non-blank card.")
+                                    }
+                                    return@launch
+                                }
+
+                                val result = adminService.rebuildCard(
                                     roJson = fetchedRoJson,
                                     rwJson = fetchedRwJson,
                                     onStatus = { msg -> scope.launch { log(msg) } }
@@ -428,49 +481,43 @@ fun App() {
 
                                 withContext(Dispatchers.Main) {
                                     cardInfoText = result.toDisplayText()
-
-                                    val prettyRo = result.writtenNps.decompressedText
-                                        ?.let(::prettyPrintJson)
-                                        ?: "(RO written, but not decompressed on verify)"
-
-                                    val prettyRw = result.writtenExtra.decompressedText
-                                        ?.let(::prettyPrintJson)
-                                        ?: "(RW written, but not decompressed on verify)"
-
                                     payloadText = buildString {
-                                        appendLine("--- E104 written/verified ---")
-                                        appendLine(prettyRo)
+                                        appendLine("--- RO candidate written to E104 ---")
+                                        appendLine(prettyPrintJson(fetchedRoJson))
                                         appendLine()
-                                        appendLine("--- E105 written/verified ---")
-                                        appendLine(prettyRw)
+                                        appendLine("--- RW candidate written to E105 ---")
+                                        appendLine(prettyPrintJson(fetchedRwJson))
                                     }.trim()
+                                    payloadEditable = prettyPrintJson(fetchedRwJson)
 
-                                    payloadEditable = prettyRw
-                                    selectedTab = MainTab.PAYLOAD
+                                    pendingRebuildConfirmation = false
+                                    pendingRebuildUid = null
+                                    pendingRebuildSummary = ""
 
-                                    val msg = when (result.stateBefore.kind) {
-                                        CardStateKind.NATO_FORMATTED ->
-                                            "Full card written to existing NATO layout."
-                                        CardStateKind.PARTIAL_OR_UNEXPECTED ->
-                                            "Full card written over partial/unexpected layout (demo mode)."
-                                        CardStateKind.BLANK_OR_UNFORMATTED ->
-                                            "Card accepted the full write using existing readable layout."
-                                        CardStateKind.ERROR ->
-                                            "Full write completed."
-                                    }
-
-                                    succeedOperation("Write Full Card", msg)
+                                    selectedTab = MainTab.CARD_INFO
+                                    succeedOperation("Rebuild Card", "Card rebuilt successfully.")
                                 }
                             } catch (e: Exception) {
                                 withContext(Dispatchers.Main) {
                                     selectedTab = MainTab.LOG
-                                    failOperation("Write Full Card", "${e::class.simpleName}: ${e.message}")
+                                    failOperation("Rebuild Card", "${e::class.simpleName}: ${e.message}")
                                 }
                             }
                         }
                     }
                 ) {
-                    Text("Write Full Card")
+                    Text("Rebuild Card")
+                }
+
+                Button(
+                    onClick = {
+                        pendingRebuildConfirmation = false
+                        pendingRebuildUid = null
+                        pendingRebuildSummary = ""
+                        succeedOperation("Rebuild Card", "Overwrite confirmation cleared.")
+                    }
+                ) {
+                    Text("Cancel Overwrite")
                 }
 
                 Button(
@@ -486,6 +533,9 @@ fun App() {
                                     selectedTab = MainTab.LOG
                                     succeedOperation("Wipe Card", "Card wiped successfully.")
                                 }
+                                pendingRebuildConfirmation = false
+                                pendingRebuildUid = null
+                                pendingRebuildSummary = ""
                             } catch (e: Exception) {
                                 withContext(Dispatchers.Main) {
                                     selectedTab = MainTab.LOG
@@ -496,6 +546,17 @@ fun App() {
                     }
                 ) {
                     Text("Wipe Card")
+                }
+
+                Button(
+                    onClick = {
+                        pendingRebuildConfirmation = false
+                        pendingRebuildUid = null
+                        pendingRebuildSummary = ""
+                        succeedOperation("Rebuild Card", "Overwrite confirmation cleared.")
+                    }
+                ) {
+                    Text("Cancel Overwrite")
                 }
             }
 
