@@ -14,7 +14,7 @@ fun main() {
             title = "NPSNFCDesktop",
             state = rememberWindowState(
                 width = 1200.dp,
-                height = 850.dp
+                height = 1050.dp
             )
         ) {
             App()

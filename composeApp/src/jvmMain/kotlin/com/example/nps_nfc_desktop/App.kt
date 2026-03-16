@@ -11,6 +11,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
@@ -19,7 +20,6 @@ import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -50,6 +50,7 @@ fun App() {
         val nfcReader = remember { NfcReader() }
         val service = remember { DesfireNdefService(nfcReader) }
         val api = remember { NpsApiService() }
+        val adminService = remember { DesfireAdminService(nfcReader) }
 
         var cardInfoText by remember { mutableStateOf("(none)") }
         var payloadText by remember { mutableStateOf("(none)") }
@@ -61,22 +62,32 @@ fun App() {
         var operationMessage by remember { mutableStateOf("Tap an action to begin.") }
 
         var baseUrl by remember { mutableStateOf("https://ipsmern-dep.azurewebsites.net") }
-        var protectText by remember { mutableStateOf("0") }
+        val protectOptions = listOf(
+            "0 - none",
+            "1 - field-level encryption (JWE)",
+            "2 - omit identifiers"
+        )
+        var selectedProtectLabel by remember { mutableStateOf(protectOptions.first()) }
+        var protectMenuExpanded by remember { mutableStateOf(false) }
         var availableRecords by remember { mutableStateOf<List<IpsListItem>>(emptyList()) }
         var selectedRecordId by remember { mutableStateOf("") }
         var selectedRecordLabel by remember { mutableStateOf("") }
         var recordMenuExpanded by remember { mutableStateOf(false) }
 
-        val logLines = remember { mutableStateListOf("Idle") }
-
         var fetchedRoJson by remember { mutableStateOf("") }
         var fetchedRwJson by remember { mutableStateOf("") }
-
-        val adminService = remember { DesfireAdminService(nfcReader) }
 
         var pendingRebuildConfirmation by remember { mutableStateOf(false) }
         var pendingRebuildUid by remember { mutableStateOf<String?>(null) }
         var pendingRebuildSummary by remember { mutableStateOf("") }
+
+        val logLines = remember { mutableStateListOf("Idle") }
+
+        val baseUrlOptions = listOf(
+            "https://ipsmern-dep.azurewebsites.net",
+            "http://localhost:5049"
+        )
+        var baseUrlMenuExpanded by remember { mutableStateOf(false) }
 
         fun log(msg: String) {
             logLines.add(msg)
@@ -106,6 +117,12 @@ fun App() {
             log("$title: error - $message")
         }
 
+        fun clearRebuildConfirmation() {
+            pendingRebuildConfirmation = false
+            pendingRebuildUid = null
+            pendingRebuildSummary = ""
+        }
+
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -118,55 +135,79 @@ fun App() {
                 style = MaterialTheme.typography.headlineSmall
             )
 
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextField(
-                    value = baseUrl,
-                    onValueChange = { baseUrl = it },
-                    label = { Text("Base URL") },
-                    modifier = Modifier.weight(1.4f)
-                )
-
-                TextField(
-                    value = protectText,
-                    onValueChange = { protectText = it },
-                    label = { Text("Protect") },
-                    modifier = Modifier.weight(0.4f)
-                )
-            }
-
-            ExposedDropdownMenuBox(
-                expanded = recordMenuExpanded,
-                onExpandedChange = { recordMenuExpanded = !recordMenuExpanded }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                TextField(
-                    value = selectedRecordLabel,
-                    onValueChange = {},
-                    readOnly = true,
-                    label = { Text("Available records") },
-                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = recordMenuExpanded) },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .menuAnchor()
-                )
-
-                ExposedDropdownMenu(
-                    expanded = recordMenuExpanded,
-                    onDismissRequest = { recordMenuExpanded = false }
+                ExposedDropdownMenuBox(
+                    expanded = baseUrlMenuExpanded,
+                    onExpandedChange = { baseUrlMenuExpanded = !baseUrlMenuExpanded },
+                    modifier = Modifier.weight(1.4f)
                 ) {
-                    availableRecords.forEach { item ->
-                        DropdownMenuItem(
-                            text = { Text(item.displayLabel()) },
-                            onClick = {
-                                selectedRecordId = item.packageUUID
-                                selectedRecordLabel = item.displayLabel()
-                                recordMenuExpanded = false
-                            }
-                        )
+                    TextField(
+                        value = baseUrl,
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("API Source") },
+                        trailingIcon = {
+                            ExposedDropdownMenuDefaults.TrailingIcon(expanded = baseUrlMenuExpanded)
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .menuAnchor()
+                    )
+
+                    ExposedDropdownMenu(
+                        expanded = baseUrlMenuExpanded,
+                        onDismissRequest = { baseUrlMenuExpanded = false }
+                    ) {
+                        baseUrlOptions.forEach { option ->
+                            DropdownMenuItem(
+                                text = { Text(option) },
+                                onClick = {
+                                    baseUrl = option
+                                    baseUrlMenuExpanded = false
+                                }
+                            )
+                        }
                     }
                 }
-            }
 
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ExposedDropdownMenuBox(
+                    expanded = protectMenuExpanded,
+                    onExpandedChange = { protectMenuExpanded = !protectMenuExpanded },
+                    modifier = Modifier.weight(0.5f)
+                ) {
+                    TextField(
+                        value = selectedProtectLabel,
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("Protect") },
+                        trailingIcon = {
+                            ExposedDropdownMenuDefaults.TrailingIcon(expanded = protectMenuExpanded)
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .menuAnchor()
+                    )
+
+                    ExposedDropdownMenu(
+                        expanded = protectMenuExpanded,
+                        onDismissRequest = { protectMenuExpanded = false }
+                    ) {
+                        protectOptions.forEach { option ->
+                            DropdownMenuItem(
+                                text = { Text(option) },
+                                onClick = {
+                                    selectedProtectLabel = option
+                                    protectMenuExpanded = false
+                                }
+                            )
+                        }
+                    }
+                }
+
                 Button(
                     onClick = {
                         startOperation("Load API List", "Loading available records...")
@@ -196,14 +237,55 @@ fun App() {
                 ) {
                     Text("Load API List")
                 }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                ExposedDropdownMenuBox(
+                    expanded = recordMenuExpanded,
+                    onExpandedChange = { recordMenuExpanded = !recordMenuExpanded },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    TextField(
+                        value = selectedRecordLabel,
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("Available Records") },
+                        trailingIcon = {
+                            ExposedDropdownMenuDefaults.TrailingIcon(expanded = recordMenuExpanded)
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .menuAnchor()
+                    )
+
+                    ExposedDropdownMenu(
+                        expanded = recordMenuExpanded,
+                        onDismissRequest = { recordMenuExpanded = false }
+                    ) {
+                        availableRecords.forEach { item ->
+                            DropdownMenuItem(
+                                text = { Text(item.displayLabel()) },
+                                onClick = {
+                                    selectedRecordId = item.packageUUID
+                                    selectedRecordLabel = item.displayLabel()
+                                    recordMenuExpanded = false
+                                }
+                            )
+                        }
+                    }
+                }
 
                 Button(
                     onClick = {
-                        startOperation("Fetch API Record", "Fetching selected record...")
+                        startOperation("Fetch Record", "Fetching selected record...")
                         scope.launch(Dispatchers.IO) {
                             try {
                                 require(selectedRecordId.isNotBlank()) { "No record selected" }
-                                val protect = protectText.toIntOrNull() ?: 0
+                                val protect = protectLabelToValue(selectedProtectLabel)
                                 val loaded = api.fetchRecord(baseUrl, selectedRecordId, protect)
 
                                 withContext(Dispatchers.Main) {
@@ -216,7 +298,8 @@ fun App() {
                                     cardInfoText = buildString {
                                         appendLine("Source package: ${loaded.meta.id}")
                                         appendLine("Cutoff: ${loaded.meta.cutoff}")
-                                        appendLine("Protect: ${loaded.meta.protect}")
+                                        appendLine("Protect: $selectedProtectLabel")
+                                        appendLine("Protect (server): ${loaded.meta.protect}")
                                         appendLine("Encoding: ${loaded.meta.encoding}")
                                         appendLine("RO JSON bytes: ${loaded.meta.roBytesJson}")
                                         appendLine("RW JSON bytes: ${loaded.meta.rwBytesJson}")
@@ -234,329 +317,353 @@ fun App() {
 
                                     payloadEditable = prettyRw
                                     selectedTab = MainTab.EDIT_EXTRA
-                                    succeedOperation("Fetch API Record", "Record fetched and decoded.")
+                                    succeedOperation("Fetch Record", "Record fetched and decoded.")
                                 }
                             } catch (e: Exception) {
                                 withContext(Dispatchers.Main) {
                                     selectedTab = MainTab.LOG
-                                    failOperation("Fetch API Record", "${e::class.simpleName}: ${e.message}")
+                                    failOperation("Fetch Record", "${e::class.simpleName}: ${e.message}")
                                 }
                             }
                         }
                     }
                 ) {
-                    Text("Fetch API Record")
+                    Text("Fetch Record")
                 }
+            }
 
-                Button(
-                    onClick = {
-                        startOperation("Inspect Card", "Waiting for card...")
-                        scope.launch(Dispatchers.IO) {
-                            try {
-                                val inspection = service.inspectCard { msg ->
-                                    scope.launch { log(msg) }
-                                }
-
-                                withContext(Dispatchers.Main) {
-                                    cardInfoText = inspection.toDisplayText()
-
-                                    val prettyNps = inspection.nps?.decompressedText
-                                        ?.let(::prettyPrintJson)
-                                        ?: "(not available)"
-
-                                    val prettyExtra = inspection.extra?.decompressedText
-                                        ?.let(::prettyPrintJson)
-                                        ?: "(not available)"
-
-                                    payloadText = buildString {
-                                        appendLine("--- NPS (E104) ---")
-                                        appendLine(prettyNps)
-                                        appendLine()
-                                        appendLine("--- EXTRA (E105) ---")
-                                        appendLine(prettyExtra)
-                                    }.trim()
-
-                                    payloadEditable = inspection.extra?.decompressedText
-                                        ?.let(::prettyPrintJson)
-                                        ?: ""
-
-                                    selectedTab = MainTab.CARD_INFO
-                                    val stateMessage = when (inspection.state.kind) {
-                                        CardStateKind.NATO_FORMATTED ->
-                                            "Existing NATO card detected. Overwrite allowed for demo."
-                                        CardStateKind.BLANK_OR_UNFORMATTED ->
-                                            "Blank or unformatted card detected."
-                                        CardStateKind.PARTIAL_OR_UNEXPECTED ->
-                                            "Card has partial/unexpected structure. Overwrite allowed for demo."
-                                        CardStateKind.ERROR ->
-                                            "Card read completed, but classification is uncertain."
-                                    }
-
-                                    succeedOperation("Inspect Card", stateMessage)
-                                }
-                            } catch (e: Exception) {
-                                withContext(Dispatchers.Main) {
-                                    selectedTab = MainTab.LOG
-                                    failOperation("Inspect Card", "${e::class.simpleName}: ${e.message}")
-                                }
-                            }
-                        }
-                    }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.Top
+            ) {
+                Card(
+                    modifier = Modifier.weight(1f),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant
+                    )
                 ) {
-                    Text("Inspect Card")
-                }
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text("Card Tools", style = MaterialTheme.typography.titleMedium)
 
-                Button(
-                    onClick = {
-                        startOperation("Read NPS", "Waiting for card...")
-                        scope.launch(Dispatchers.IO) {
-                            try {
-                                val parsed = service.readNps { msg ->
-                                    scope.launch { log(msg) }
-                                }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Button(
+                                onClick = {
+                                    startOperation("Inspect Card", "Waiting for card...")
+                                    scope.launch(Dispatchers.IO) {
+                                        try {
+                                            val inspection = service.inspectCard { msg ->
+                                                scope.launch { log(msg) }
+                                            }
 
-                                withContext(Dispatchers.Main) {
-                                    payloadText = parsed.decompressedText
-                                        ?.let(::prettyPrintJson)
-                                        ?: "(Payload read, but not decompressed)"
+                                            withContext(Dispatchers.Main) {
+                                                cardInfoText = inspection.toDisplayText()
 
-                                    cardInfoText = buildString {
-                                        appendLine("NPS MIME: ${parsed.mimeType}")
-                                        appendLine("Compressed bytes: ${parsed.compressedPayload.size}")
-                                    }.trim()
+                                                val prettyNps = inspection.nps?.decompressedText
+                                                    ?.let(::prettyPrintJson)
+                                                    ?: "(not available)"
 
-                                    selectedTab = MainTab.PAYLOAD
-                                    succeedOperation("Read NPS", "Historic NPS payload read successfully.")
-                                }
-                            } catch (e: Exception) {
-                                withContext(Dispatchers.Main) {
-                                    selectedTab = MainTab.LOG
-                                    failOperation("Read NPS", "${e::class.simpleName}: ${e.message}")
-                                }
-                            }
-                        }
-                    }
-                ) {
-                    Text("Read NPS")
-                }
+                                                val prettyExtra = inspection.extra?.decompressedText
+                                                    ?.let(::prettyPrintJson)
+                                                    ?: "(not available)"
 
-                Button(
-                    onClick = {
-                        startOperation("Read EXTRA", "Waiting for card...")
-                        scope.launch(Dispatchers.IO) {
-                            try {
-                                val parsed = service.readExtra { msg ->
-                                    scope.launch { log(msg) }
-                                }
+                                                payloadText = buildString {
+                                                    appendLine("--- NPS (E104) ---")
+                                                    appendLine(prettyNps)
+                                                    appendLine()
+                                                    appendLine("--- EXTRA (E105) ---")
+                                                    appendLine(prettyExtra)
+                                                }.trim()
 
-                                withContext(Dispatchers.Main) {
-                                    val pretty = parsed.decompressedText
-                                        ?.let(::prettyPrintJson)
-                                        ?: "(Payload read, but not decompressed)"
+                                                payloadEditable = inspection.extra?.decompressedText
+                                                    ?.let(::prettyPrintJson)
+                                                    ?: ""
 
-                                    payloadText = pretty
-                                    payloadEditable = pretty
+                                                selectedTab = MainTab.CARD_INFO
+                                                val stateMessage = when (inspection.state.kind) {
+                                                    CardStateKind.NATO_FORMATTED ->
+                                                        "Existing NATO card detected. Overwrite allowed for demo."
+                                                    CardStateKind.BLANK_OR_UNFORMATTED ->
+                                                        "Blank or unformatted card detected."
+                                                    CardStateKind.PARTIAL_OR_UNEXPECTED ->
+                                                        "Card has partial/unexpected structure. Overwrite allowed for demo."
+                                                    CardStateKind.ERROR ->
+                                                        "Card read completed, but classification is uncertain."
+                                                }
 
-                                    cardInfoText = buildString {
-                                        appendLine("EXTRA MIME: ${parsed.mimeType}")
-                                        appendLine("Compressed bytes: ${parsed.compressedPayload.size}")
-                                    }.trim()
-
-                                    selectedTab = MainTab.EDIT_EXTRA
-                                    succeedOperation("Read EXTRA", "Operational payload read successfully.")
-                                }
-                            } catch (e: Exception) {
-                                withContext(Dispatchers.Main) {
-                                    selectedTab = MainTab.LOG
-                                    failOperation("Read EXTRA", "${e::class.simpleName}: ${e.message}")
-                                }
-                            }
-                        }
-                    }
-                ) {
-                    Text("Read EXTRA")
-                }
-
-                Button(
-                    onClick = {
-                        startOperation("Write EXTRA", "Waiting for card...")
-                        scope.launch(Dispatchers.IO) {
-                            try {
-                                val parsed = service.writeExtraJson(
-                                    jsonText = payloadEditable,
-                                    onStatus = { msg -> scope.launch { log(msg) } }
-                                )
-
-                                withContext(Dispatchers.Main) {
-                                    val pretty = parsed.decompressedText
-                                        ?.let(::prettyPrintJson)
-                                        ?: "(Payload written, but not decompressed on verify)"
-
-                                    payloadText = pretty
-                                    payloadEditable = pretty
-
-                                    cardInfoText = buildString {
-                                        appendLine("EXTRA MIME: ${parsed.mimeType}")
-                                        appendLine("Compressed bytes: ${parsed.compressedPayload.size}")
-                                        appendLine("Write/verify: OK")
-                                    }.trim()
-
-                                    selectedTab = MainTab.PAYLOAD
-                                    succeedOperation("Write EXTRA", "Operational payload written and verified.")
-                                }
-                            } catch (e: Exception) {
-                                withContext(Dispatchers.Main) {
-                                    selectedTab = MainTab.LOG
-                                    failOperation("Write EXTRA", "${e::class.simpleName}: ${e.message}")
-                                }
-                            }
-                        }
-                    }
-                ) {
-                    Text("Write EXTRA")
-                }
-
-                Button(
-                    onClick = {
-                        startOperation("Rebuild Card", "Waiting for card...")
-                        scope.launch(Dispatchers.IO) {
-                            try {
-                                require(fetchedRoJson.isNotBlank()) { "No fetched RO record available. Fetch an API record first." }
-                                require(fetchedRwJson.isNotBlank()) { "No fetched RW record available. Fetch an API record first." }
-
-                                val inspection = try {
-                                    service.inspectCard { msg ->
-                                        scope.launch { log(msg) }
-                                    }
-                                } catch (e: Exception) {
-                                    val msg = e.message ?: ""
-                                    if (msg.contains("SW=6A82")) {
-                                        null
-                                    } else {
-                                        throw e
+                                                succeedOperation("Inspect Card", stateMessage)
+                                            }
+                                        } catch (e: Exception) {
+                                            withContext(Dispatchers.Main) {
+                                                selectedTab = MainTab.LOG
+                                                failOperation("Inspect Card", "${e::class.simpleName}: ${e.message}")
+                                            }
+                                        }
                                     }
                                 }
+                            ) {
+                                Text("Inspect Card")
+                            }
 
-                                val isBlank = inspection == null ||
-                                        inspection.state.kind == CardStateKind.BLANK_OR_UNFORMATTED
+                            Button(
+                                onClick = {
+                                    startOperation("Read NPS", "Waiting for card...")
+                                    scope.launch(Dispatchers.IO) {
+                                        try {
+                                            val parsed = service.readNps { msg ->
+                                                scope.launch { log(msg) }
+                                            }
 
-                                val sameCardAwaitingConfirmation =
-                                    inspection != null &&
-                                            pendingRebuildConfirmation &&
-                                            pendingRebuildUid != null &&
-                                            pendingRebuildUid == inspection.uidHex
+                                            withContext(Dispatchers.Main) {
+                                                payloadText = parsed.decompressedText
+                                                    ?.let(::prettyPrintJson)
+                                                    ?: "(Payload read, but not decompressed)"
 
-                                if (!isBlank && !sameCardAwaitingConfirmation) {
-                                    withContext(Dispatchers.Main) {
-                                        pendingRebuildConfirmation = true
-                                        pendingRebuildUid = inspection?.uidHex
-                                        pendingRebuildSummary = buildString {
-                                            appendLine("UID: ${inspection?.uidHex ?: "(unknown)"}")
-                                            appendLine("State: ${inspection?.state?.label ?: "(unknown)"}")
-                                            appendLine("Detail: ${inspection?.state?.detail ?: "(unknown)"}")
-                                        }.trim()
+                                                cardInfoText = buildString {
+                                                    appendLine("NPS MIME: ${parsed.mimeType}")
+                                                    appendLine("Compressed bytes: ${parsed.compressedPayload.size}")
+                                                }.trim()
 
-                                        cardInfoText = buildString {
-                                            appendLine("Rebuild confirmation required.")
-                                            appendLine()
-                                            appendLine(pendingRebuildSummary)
-                                            appendLine()
-                                            appendLine("Press 'Rebuild Card' again to overwrite this card.")
-                                        }.trim()
-
-                                        selectedTab = MainTab.CARD_INFO
-                                        operationState = OperationState.WORKING
-                                        operationTitle = "Rebuild Card"
-                                        operationMessage = "Card is not blank. Press 'Rebuild Card' again to confirm overwrite."
-                                        log("Rebuild Card: confirmation required for non-blank card.")
+                                                selectedTab = MainTab.PAYLOAD
+                                                succeedOperation("Read NPS", "Historic NPS payload read successfully.")
+                                            }
+                                        } catch (e: Exception) {
+                                            withContext(Dispatchers.Main) {
+                                                selectedTab = MainTab.LOG
+                                                failOperation("Read NPS", "${e::class.simpleName}: ${e.message}")
+                                            }
+                                        }
                                     }
-                                    return@launch
                                 }
+                            ) {
+                                Text("Read NPS")
+                            }
 
-                                val result = adminService.rebuildCard(
-                                    roJson = fetchedRoJson,
-                                    rwJson = fetchedRwJson,
-                                    onStatus = { msg -> scope.launch { log(msg) } }
-                                )
+                            Button(
+                                onClick = {
+                                    startOperation("Read EXTRA", "Waiting for card...")
+                                    scope.launch(Dispatchers.IO) {
+                                        try {
+                                            val parsed = service.readExtra { msg ->
+                                                scope.launch { log(msg) }
+                                            }
 
-                                withContext(Dispatchers.Main) {
-                                    cardInfoText = result.toDisplayText()
-                                    payloadText = buildString {
-                                        appendLine("--- RO candidate written to E104 ---")
-                                        appendLine(prettyPrintJson(fetchedRoJson))
-                                        appendLine()
-                                        appendLine("--- RW candidate written to E105 ---")
-                                        appendLine(prettyPrintJson(fetchedRwJson))
-                                    }.trim()
-                                    payloadEditable = prettyPrintJson(fetchedRwJson)
+                                            withContext(Dispatchers.Main) {
+                                                val pretty = parsed.decompressedText
+                                                    ?.let(::prettyPrintJson)
+                                                    ?: "(Payload read, but not decompressed)"
 
-                                    pendingRebuildConfirmation = false
-                                    pendingRebuildUid = null
-                                    pendingRebuildSummary = ""
+                                                payloadText = pretty
+                                                payloadEditable = pretty
 
-                                    selectedTab = MainTab.CARD_INFO
-                                    succeedOperation("Rebuild Card", "Card rebuilt successfully.")
+                                                cardInfoText = buildString {
+                                                    appendLine("EXTRA MIME: ${parsed.mimeType}")
+                                                    appendLine("Compressed bytes: ${parsed.compressedPayload.size}")
+                                                }.trim()
+
+                                                selectedTab = MainTab.EDIT_EXTRA
+                                                succeedOperation("Read EXTRA", "Operational payload read successfully.")
+                                            }
+                                        } catch (e: Exception) {
+                                            withContext(Dispatchers.Main) {
+                                                selectedTab = MainTab.LOG
+                                                failOperation("Read EXTRA", "${e::class.simpleName}: ${e.message}")
+                                            }
+                                        }
+                                    }
                                 }
-                            } catch (e: Exception) {
-                                withContext(Dispatchers.Main) {
-                                    selectedTab = MainTab.LOG
-                                    failOperation("Rebuild Card", "${e::class.simpleName}: ${e.message}")
+                            ) {
+                                Text("Read EXTRA")
+                            }
+
+                            Button(
+                                onClick = {
+                                    startOperation("Write EXTRA", "Waiting for card...")
+                                    scope.launch(Dispatchers.IO) {
+                                        try {
+                                            val parsed = service.writeExtraJson(
+                                                jsonText = payloadEditable,
+                                                onStatus = { msg -> scope.launch { log(msg) } }
+                                            )
+
+                                            withContext(Dispatchers.Main) {
+                                                val pretty = parsed.decompressedText
+                                                    ?.let(::prettyPrintJson)
+                                                    ?: "(Payload written, but not decompressed on verify)"
+
+                                                payloadText = pretty
+                                                payloadEditable = pretty
+
+                                                cardInfoText = buildString {
+                                                    appendLine("EXTRA MIME: ${parsed.mimeType}")
+                                                    appendLine("Compressed bytes: ${parsed.compressedPayload.size}")
+                                                    appendLine("Write/verify: OK")
+                                                }.trim()
+
+                                                selectedTab = MainTab.PAYLOAD
+                                                succeedOperation("Write EXTRA", "Operational payload written and verified.")
+                                            }
+                                        } catch (e: Exception) {
+                                            withContext(Dispatchers.Main) {
+                                                selectedTab = MainTab.LOG
+                                                failOperation("Write EXTRA", "${e::class.simpleName}: ${e.message}")
+                                            }
+                                        }
+                                    }
                                 }
+                            ) {
+                                Text("Write EXTRA")
                             }
                         }
                     }
-                ) {
-                    Text("Rebuild Card")
                 }
 
-                Button(
-                    onClick = {
-                        pendingRebuildConfirmation = false
-                        pendingRebuildUid = null
-                        pendingRebuildSummary = ""
-                        succeedOperation("Rebuild Card", "Overwrite confirmation cleared.")
-                    }
+                Card(
+                    modifier = Modifier.weight(1f),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant
+                    )
                 ) {
-                    Text("Cancel Overwrite")
-                }
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text("Card Admin", style = MaterialTheme.typography.titleMedium)
 
-                Button(
-                    onClick = {
-                        startOperation("Wipe Card", "Preparing destructive wipe...")
-                        scope.launch(Dispatchers.IO) {
-                            try {
-                                adminService.wipeCard { msg ->
-                                    scope.launch { log(msg) }
-                                }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Button(
+                                onClick = {
+                                    startOperation("Rebuild Card", "Waiting for card...")
+                                    scope.launch(Dispatchers.IO) {
+                                        try {
+                                            require(fetchedRoJson.isNotBlank()) { "No fetched RO record available. Fetch an API record first." }
+                                            require(fetchedRwJson.isNotBlank()) { "No fetched RW record available. Fetch an API record first." }
 
-                                withContext(Dispatchers.Main) {
-                                    selectedTab = MainTab.LOG
-                                    succeedOperation("Wipe Card", "Card wiped successfully.")
+                                            val inspection = try {
+                                                service.inspectCard { msg ->
+                                                    scope.launch { log(msg) }
+                                                }
+                                            } catch (e: Exception) {
+                                                val msg = e.message ?: ""
+                                                if (msg.contains("SW=6A82")) null else throw e
+                                            }
+
+                                            val isBlank = inspection == null ||
+                                                    inspection.state.kind == CardStateKind.BLANK_OR_UNFORMATTED
+
+                                            val sameCardAwaitingConfirmation =
+                                                inspection != null &&
+                                                        pendingRebuildConfirmation &&
+                                                        pendingRebuildUid != null &&
+                                                        pendingRebuildUid == inspection.uidHex
+
+                                            if (!isBlank && !sameCardAwaitingConfirmation) {
+                                                withContext(Dispatchers.Main) {
+                                                    pendingRebuildConfirmation = true
+                                                    pendingRebuildUid = inspection.uidHex
+                                                    pendingRebuildSummary = buildString {
+                                                        appendLine("UID: ${inspection.uidHex ?: "(unknown)"}")
+                                                        appendLine("State: ${inspection.state.label}")
+                                                        appendLine("Detail: ${inspection.state.detail}")
+                                                    }.trim()
+
+                                                    cardInfoText = buildString {
+                                                        appendLine("Rebuild confirmation required.")
+                                                        appendLine()
+                                                        appendLine(pendingRebuildSummary)
+                                                        appendLine()
+                                                        appendLine("Press 'Rebuild Card' again to overwrite this card.")
+                                                    }.trim()
+
+                                                    selectedTab = MainTab.CARD_INFO
+                                                    operationState = OperationState.WORKING
+                                                    operationTitle = "Rebuild Card"
+                                                    operationMessage =
+                                                        "Card is not blank. Press 'Rebuild Card' again to confirm overwrite."
+                                                    log("Rebuild Card: confirmation required for non-blank card.")
+                                                }
+                                                return@launch
+                                            }
+
+                                            val result = adminService.rebuildCard(
+                                                roJson = fetchedRoJson,
+                                                rwJson = fetchedRwJson,
+                                                onStatus = { msg -> scope.launch { log(msg) } }
+                                            )
+
+                                            withContext(Dispatchers.Main) {
+                                                cardInfoText = result.toDisplayText()
+                                                payloadText = buildString {
+                                                    appendLine("--- RO candidate written to E104 ---")
+                                                    appendLine(prettyPrintJson(fetchedRoJson))
+                                                    appendLine()
+                                                    appendLine("--- RW candidate written to E105 ---")
+                                                    appendLine(prettyPrintJson(fetchedRwJson))
+                                                }.trim()
+                                                payloadEditable = prettyPrintJson(fetchedRwJson)
+
+                                                clearRebuildConfirmation()
+
+                                                selectedTab = MainTab.CARD_INFO
+                                                succeedOperation("Rebuild Card", "Card rebuilt successfully.")
+                                            }
+                                        } catch (e: Exception) {
+                                            withContext(Dispatchers.Main) {
+                                                selectedTab = MainTab.LOG
+                                                failOperation("Rebuild Card", "${e::class.simpleName}: ${e.message}")
+                                            }
+                                        }
+                                    }
                                 }
-                                pendingRebuildConfirmation = false
-                                pendingRebuildUid = null
-                                pendingRebuildSummary = ""
-                            } catch (e: Exception) {
-                                withContext(Dispatchers.Main) {
-                                    selectedTab = MainTab.LOG
-                                    failOperation("Wipe Card", "${e::class.simpleName}: ${e.message}")
+                            ) {
+                                Text("Rebuild Card")
+                            }
+
+                            Button(
+                                onClick = {
+                                    clearRebuildConfirmation()
+                                    succeedOperation("Rebuild Card", "Rebuild confirmation cleared.")
                                 }
+                            ) {
+                                Text("Cancel Rebuild")
+                            }
+
+                            Button(
+                                onClick = {
+                                    startOperation("Wipe Card", "Preparing destructive wipe...")
+                                    scope.launch(Dispatchers.IO) {
+                                        try {
+                                            adminService.wipeCard { msg ->
+                                                scope.launch { log(msg) }
+                                            }
+
+                                            withContext(Dispatchers.Main) {
+                                                selectedTab = MainTab.LOG
+                                                clearRebuildConfirmation()
+                                                succeedOperation("Wipe Card", "Card wiped successfully.")
+                                            }
+                                        } catch (e: Exception) {
+                                            withContext(Dispatchers.Main) {
+                                                selectedTab = MainTab.LOG
+                                                failOperation("Wipe Card", "${e::class.simpleName}: ${e.message}")
+                                            }
+                                        }
+                                    }
+                                }
+                            ) {
+                                Text("Wipe Card")
                             }
                         }
                     }
-                ) {
-                    Text("Wipe Card")
-                }
-
-                Button(
-                    onClick = {
-                        pendingRebuildConfirmation = false
-                        pendingRebuildUid = null
-                        pendingRebuildSummary = ""
-                        succeedOperation("Rebuild Card", "Overwrite confirmation cleared.")
-                    }
-                ) {
-                    Text("Cancel Overwrite")
                 }
             }
 
@@ -679,6 +786,9 @@ private fun OperationBanner(
         }
     }
 }
+
+private fun protectLabelToValue(label: String): Int =
+    label.substringBefore(" ").toIntOrNull() ?: 0
 
 private fun prettyPrintJson(input: String): String {
     val text = input.trim()

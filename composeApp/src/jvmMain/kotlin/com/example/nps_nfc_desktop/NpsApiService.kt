@@ -2,18 +2,13 @@ package com.example.nps_nfc_desktop
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.contentOrNull
 import java.io.ByteArrayInputStream
-import java.net.URI
+import java.net.HttpURLConnection
+import java.net.URL
 import java.net.URLEncoder
-import java.net.http.HttpClient
-import java.net.http.HttpRequest
-import java.net.http.HttpResponse
 import java.nio.charset.StandardCharsets
-import java.time.Duration
 import java.util.Base64
 import java.util.zip.GZIPInputStream
 
@@ -51,28 +46,14 @@ data class LoadedApiRecord(
 
 class NpsApiService {
 
-    private val client = HttpClient.newBuilder()
-        .connectTimeout(Duration.ofSeconds(20))
-        .build()
-
     private val json = Json {
         ignoreUnknownKeys = true
     }
 
     fun listRecords(baseUrl: String): List<IpsListItem> {
-        val url = normalizeBaseUrl(baseUrl) + "/ips/list"
-        val request = HttpRequest.newBuilder()
-            .uri(URI.create(url))
-            .header("accept", "application/json")
-            .GET()
-            .build()
+        val body = httpGet(normalizeBaseUrl(baseUrl) + "/ips/list")
 
-        val response = client.send(request, HttpResponse.BodyHandlers.ofString())
-        require(response.statusCode() in 200..299) {
-            "List request failed: HTTP ${response.statusCode()}"
-        }
-
-        val root = json.parseToJsonElement(response.body())
+        val root = json.parseToJsonElement(body)
         require(root is JsonArray) { "Expected JSON array from /ips/list" }
 
         return root.map { item ->
@@ -87,20 +68,9 @@ class NpsApiService {
 
     fun fetchRecord(baseUrl: String, id: String, protect: Int): LoadedApiRecord {
         val encodedId = URLEncoder.encode(id, StandardCharsets.UTF_8)
-        val url = normalizeBaseUrl(baseUrl) + "/npsnfc/$encodedId?protect=$protect"
+        val body = httpGet("${normalizeBaseUrl(baseUrl)}/npsnfc/$encodedId?protect=$protect")
 
-        val request = HttpRequest.newBuilder()
-            .uri(URI.create(url))
-            .header("accept", "application/json")
-            .GET()
-            .build()
-
-        val response = client.send(request, HttpResponse.BodyHandlers.ofString())
-        require(response.statusCode() in 200..299) {
-            "Fetch request failed: HTTP ${response.statusCode()}"
-        }
-
-        val root = json.parseToJsonElement(response.body())
+        val root = json.parseToJsonElement(body)
         val obj = root as? JsonObject ?: error("Expected JSON object from /npsnfc/{id}")
 
         val parsed = NpsNfcApiResponse(
@@ -123,6 +93,36 @@ class NpsApiService {
         )
     }
 
+    private fun httpGet(url: String): String {
+        val connection = (URL(url).openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 20000
+            readTimeout = 20000
+            setRequestProperty("Accept", "application/json")
+            setRequestProperty("Connection", "close")
+            instanceFollowRedirects = true
+        }
+
+        return try {
+            val status = connection.responseCode
+            val stream = if (status in 200..299) {
+                connection.inputStream
+            } else {
+                connection.errorStream ?: error("HTTP $status with no response body")
+            }
+
+            val text = stream.bufferedReader(StandardCharsets.UTF_8).use { it.readText() }
+
+            require(status in 200..299) {
+                "Request failed: HTTP $status${if (text.isNotBlank()) " - $text" else ""}"
+            }
+
+            text
+        } finally {
+            connection.disconnect()
+        }
+    }
+
     private fun normalizeBaseUrl(baseUrl: String): String =
         baseUrl.trim().removeSuffix("/")
 
@@ -138,7 +138,7 @@ private fun JsonObject.string(name: String): String =
     this[name]?.jsonPrimitive?.content ?: error("Missing string field: $name")
 
 private fun JsonObject.stringOrNull(name: String): String? =
-    this[name]?.jsonPrimitive?.contentOrNull
+    this[name]?.jsonPrimitive?.content
 
 private fun JsonObject.int(name: String): Int =
     this[name]?.jsonPrimitive?.content?.toIntOrNull() ?: error("Missing int field: $name")
