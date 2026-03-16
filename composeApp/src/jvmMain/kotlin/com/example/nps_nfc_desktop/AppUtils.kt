@@ -1,9 +1,8 @@
 package com.example.nps_nfc_desktop
 
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.*
+import java.time.OffsetDateTime
+import java.time.ZoneOffset
 
 fun protectLabelToValue(label: String): Int =
     label.substringBefore(" ").toIntOrNull() ?: 0
@@ -134,4 +133,193 @@ fun buildApiUpdateCheckResult(
 fun countBundleEntries(jsonText: String?): Int {
     val summary = parseBundleSummary(jsonText)
     return summary?.entryKeys?.size ?: 0
+}
+
+private val appJson = Json {
+    prettyPrint = false
+    ignoreUnknownKeys = true
+}
+
+private fun parseJsonObjectOrNull(jsonText: String?): JsonObject? {
+    if (jsonText.isNullOrBlank()) return null
+    return try {
+        appJson.parseToJsonElement(jsonText) as? JsonObject
+    } catch (_: Exception) {
+        null
+    }
+}
+
+private fun nextObservationNumber(vararg bundleJsons: String?): Int {
+    val regex = Regex("^ob(\\d+)$", RegexOption.IGNORE_CASE)
+
+    val maxFound = bundleJsons
+        .mapNotNull(::parseJsonObjectOrNull)
+        .flatMap { root ->
+            val entries = root["entry"] as? JsonArray ?: JsonArray(emptyList())
+            entries.mapNotNull { entryEl ->
+                val entryObj = entryEl as? JsonObject ?: return@mapNotNull null
+                val resourceObj = entryObj["resource"] as? JsonObject ?: return@mapNotNull null
+
+                val resourceType = resourceObj["resourceType"]?.jsonPrimitive?.contentOrNull
+                val id = resourceObj["id"]?.jsonPrimitive?.contentOrNull
+
+                if (resourceType != "Observation" || id == null) return@mapNotNull null
+
+                regex.matchEntire(id)?.groupValues?.getOrNull(1)?.toIntOrNull()
+            }
+        }
+        .maxOrNull()
+
+    return (maxFound ?: 0) + 1
+}
+
+fun buildBloodPressureEntry(
+    observationId: String,
+    systolic: Int,
+    diastolic: Int,
+    effectiveDateTime: String = OffsetDateTime.now(ZoneOffset.UTC).withNano(0).toString()
+): JsonObject {
+    return buildJsonObject {
+        put(
+            "resource",
+            buildJsonObject {
+                put("resourceType", JsonPrimitive("Observation"))
+                put("id", JsonPrimitive(observationId))
+                put("status", JsonPrimitive("final"))
+
+                put(
+                    "code",
+                    buildJsonObject {
+                        put(
+                            "coding",
+                            buildJsonArray {
+                                add(
+                                    buildJsonObject {
+                                        put("display", JsonPrimitive("Blood Pressure"))
+                                    }
+                                )
+                            }
+                        )
+                    }
+                )
+
+                put(
+                    "subject",
+                    buildJsonObject {
+                        put("reference", JsonPrimitive("Patient/pt1"))
+                    }
+                )
+
+                put("effectiveDateTime", JsonPrimitive(effectiveDateTime))
+
+                put(
+                    "component",
+                    buildJsonArray {
+                        add(
+                            buildJsonObject {
+                                put(
+                                    "code",
+                                    buildJsonObject {
+                                        put(
+                                            "coding",
+                                            buildJsonArray {
+                                                add(
+                                                    buildJsonObject {
+                                                        put("system", JsonPrimitive("http://snomed.info/sct"))
+                                                        put("code", JsonPrimitive("271649006"))
+                                                        put("display", JsonPrimitive("Systolic blood pressure"))
+                                                    }
+                                                )
+                                            }
+                                        )
+                                    }
+                                )
+                                put(
+                                    "valueQuantity",
+                                    buildJsonObject {
+                                        put("value", JsonPrimitive(systolic))
+                                        put("unit", JsonPrimitive("mm[Hg]"))
+                                        put("system", JsonPrimitive("http://unitsofmeasure.org"))
+                                        put("code", JsonPrimitive("mm[Hg]"))
+                                    }
+                                )
+                            }
+                        )
+
+                        add(
+                            buildJsonObject {
+                                put(
+                                    "code",
+                                    buildJsonObject {
+                                        put(
+                                            "coding",
+                                            buildJsonArray {
+                                                add(
+                                                    buildJsonObject {
+                                                        put("system", JsonPrimitive("http://snomed.info/sct"))
+                                                        put("code", JsonPrimitive("271650006"))
+                                                        put("display", JsonPrimitive("Diastolic blood pressure"))
+                                                    }
+                                                )
+                                            }
+                                        )
+                                    }
+                                )
+                                put(
+                                    "valueQuantity",
+                                    buildJsonObject {
+                                        put("value", JsonPrimitive(diastolic))
+                                        put("unit", JsonPrimitive("mm[Hg]"))
+                                        put("system", JsonPrimitive("http://unitsofmeasure.org"))
+                                        put("code", JsonPrimitive("mm[Hg]"))
+                                    }
+                                )
+                            }
+                        )
+                    }
+                )
+            }
+        )
+    }
+}
+
+fun appendBloodPressureToExtraBundle(
+    roJson: String?,
+    rwJson: String?,
+    systolic: Int,
+    diastolic: Int
+): String {
+    val rwRoot = parseJsonObjectOrNull(rwJson)
+        ?: error("RW / EXTRA JSON is empty or invalid.")
+
+    val nextObId = "ob${nextObservationNumber(roJson, rwJson)}"
+
+    val existingEntries = (rwRoot["entry"] as? JsonArray)?.toMutableList() ?: mutableListOf()
+    existingEntries.add(
+        buildBloodPressureEntry(
+            observationId = nextObId,
+            systolic = systolic,
+            diastolic = diastolic
+        )
+    )
+
+    val currentTotal = rwRoot["total"]?.jsonPrimitive?.intOrNull
+    val updatedRoot = buildJsonObject {
+        rwRoot.forEach { (key, value) ->
+            when (key) {
+                "entry" -> put("entry", JsonArray(existingEntries))
+                "total" -> put("total", JsonPrimitive((currentTotal ?: existingEntries.size - 1) + 1))
+                else -> put(key, value)
+            }
+        }
+
+        if ("entry" !in rwRoot) {
+            put("entry", JsonArray(existingEntries))
+        }
+        if ("total" !in rwRoot) {
+            put("total", JsonPrimitive(existingEntries.size))
+        }
+    }
+
+    return appJson.encodeToString(JsonObject.serializer(), updatedRoot)
 }

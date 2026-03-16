@@ -162,6 +162,11 @@ fun RecordSelectionRow(
 
 @Composable
 fun CardToolsSection(
+    systolicText: String,
+    onSystolicChange: (String) -> Unit,
+    diastolicText: String,
+    onDiastolicChange: (String) -> Unit,
+    onAddBloodPressure: () -> Unit,
     onInspectCard: () -> Unit,
     onSyncCard: () -> Unit,
     onReadNps: () -> Unit,
@@ -180,6 +185,30 @@ fun CardToolsSection(
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Text("Card Tools", style = MaterialTheme.typography.titleMedium)
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                TextField(
+                    value = systolicText,
+                    onValueChange = onSystolicChange,
+                    label = { Text("Sys") },
+                    modifier = Modifier.weight(1f)
+                )
+
+                TextField(
+                    value = diastolicText,
+                    onValueChange = onDiastolicChange,
+                    label = { Text("Dia") },
+                    modifier = Modifier.weight(1f)
+                )
+
+                Button(onClick = onAddBloodPressure) {
+                    Text("Add BP")
+                }
+            }
 
             Row(
                 modifier = Modifier.fillMaxWidth(),

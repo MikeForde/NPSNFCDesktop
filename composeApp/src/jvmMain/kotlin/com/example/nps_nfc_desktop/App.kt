@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextField
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -61,6 +62,9 @@ fun App() {
 
         var pendingServerUpdateRwJson by remember { mutableStateOf("") }
         var pendingServerUpdateSummary by remember { mutableStateOf("") }
+
+        var systolicText by remember { mutableStateOf("120") }
+        var diastolicText by remember { mutableStateOf("70") }
 
         val logLines = remember { mutableStateListOf("Idle") }
 
@@ -226,6 +230,48 @@ fun App() {
             ) {
                 Column(modifier = Modifier.weight(2f)) {
                     CardToolsSection(
+                        systolicText = systolicText,
+                        onSystolicChange = { systolicText = it },
+                        diastolicText = diastolicText,
+                        onDiastolicChange = { diastolicText = it },
+                        onAddBloodPressure = {
+                            try {
+                                val systolic = systolicText.toIntOrNull()
+                                    ?: error("Systolic must be a whole number.")
+                                val diastolic = diastolicText.toIntOrNull()
+                                    ?: error("Diastolic must be a whole number.")
+
+                                require(systolic > 0) { "Systolic must be greater than 0." }
+                                require(diastolic > 0) { "Diastolic must be greater than 0." }
+
+                                val baseRw = when {
+                                    payloadEditable.isNotBlank() -> payloadEditable
+                                    fetchedRwJson.isNotBlank() -> fetchedRwJson
+                                    else -> error("No RW / EXTRA payload available. Fetch or read a record first.")
+                                }
+
+                                val updatedRwJson = appendBloodPressureToExtraBundle(
+                                    roJson = fetchedRoJson,
+                                    rwJson = baseRw,
+                                    systolic = systolic,
+                                    diastolic = diastolic
+                                )
+
+                                val pretty = prettyPrintJson(updatedRwJson)
+
+                                payloadEditable = pretty
+                                payloadText = pretty
+                                fetchedRwJson = updatedRwJson
+                                selectedTab = MainTab.EDIT_EXTRA
+
+                                succeedOperation(
+                                    "Add BP",
+                                    "Blood pressure observation added to RW as the next Observation id."
+                                )
+                            } catch (e: Exception) {
+                                failOperation("Add BP", "${e::class.simpleName}: ${e.message}")
+                            }
+                        },
                         onInspectCard = {
                             startOperation("Inspect Card", "Waiting for card...")
                             scope.launch(Dispatchers.IO) {
@@ -538,6 +584,7 @@ fun App() {
 
                                         payloadText = pretty
                                         payloadEditable = pretty
+                                        fetchedRwJson = parsed.decompressedText ?: ""
 
                                         cardInfoText = buildString {
                                             appendLine("EXTRA MIME: ${parsed.mimeType}")
