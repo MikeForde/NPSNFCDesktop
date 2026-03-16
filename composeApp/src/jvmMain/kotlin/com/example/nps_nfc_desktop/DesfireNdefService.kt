@@ -2,6 +2,23 @@ package com.example.nps_nfc_desktop
 
 import javax.smartcardio.ResponseAPDU
 
+data class FullWriteResult(
+    val stateBefore: CardState,
+    val writtenNps: ParsedNdefPayload,
+    val writtenExtra: ParsedNdefPayload
+) {
+    fun toDisplayText(): String = buildString {
+        appendLine("State before write: ${stateBefore.label}")
+        appendLine("Detail: ${stateBefore.detail}")
+        appendLine()
+        appendLine("E104 MIME: ${writtenNps.mimeType}")
+        appendLine("E104 compressed bytes: ${writtenNps.compressedPayload.size}")
+        appendLine()
+        appendLine("E105 MIME: ${writtenExtra.mimeType}")
+        appendLine("E105 compressed bytes: ${writtenExtra.compressedPayload.size}")
+    }.trim()
+}
+
 data class CardInspection(
     val readerName: String,
     val protocol: String,
@@ -10,13 +27,16 @@ data class CardInspection(
     val ccFileHex: String?,
     val ccSummary: String?,
     val nps: ParsedNdefPayload?,
-    val extra: ParsedNdefPayload?
+    val extra: ParsedNdefPayload?,
+    val state: CardState
 ) {
     fun toDisplayText(): String = buildString {
         appendLine("Reader: $readerName")
         appendLine("Protocol: $protocol")
         appendLine("ATR: ${atrHex ?: "(none)"}")
         appendLine("UID: ${uidHex ?: "(not available)"}")
+        appendLine("Card State: ${state.label}")
+        appendLine("State Detail: ${state.detail}")
         appendLine("CC: ${ccFileHex ?: "(not read)"}")
         appendLine("CC Summary: ${ccSummary ?: "(not parsed)"}")
         appendLine()
@@ -42,6 +62,20 @@ data class CardInspection(
     }.trim()
 }
 
+enum class CardStateKind {
+    BLANK_OR_UNFORMATTED,
+    NATO_FORMATTED,
+    PARTIAL_OR_UNEXPECTED,
+    ERROR
+}
+
+data class CardState(
+    val kind: CardStateKind,
+    val label: String,
+    val detail: String,
+    val allowOverwriteForDemo: Boolean
+)
+
 class DesfireNdefService(
     private val reader: NfcReader
 ) {
@@ -66,6 +100,151 @@ class DesfireNdefService(
         private val GET_UID = hex(
             "FFCA000000"
         )
+    }
+
+    fun writeNpsJson(
+        jsonText: String,
+        onStatus: (String) -> Unit
+    ): ParsedNdefPayload {
+        return reader.withFirstCard(onStatus) { session ->
+            selectNdefApplication(session, onStatus)
+
+            val ccBytes = readCcFile(session, onStatus)
+            val npsCapacity = extractMaxSizeFromCc(ccBytes, 0xE104)
+            onStatus("E104 capacity from CC: $npsCapacity bytes")
+
+            val compressed = NdefCodec.gzipUtf8(jsonText)
+            val message = NdefCodec.buildSingleMimeMessage(
+                mimeType = "application/x.nps.gzip.v1-0",
+                payload = compressed
+            )
+            val fileBytes = NdefCodec.wrapAsType4NdefFile(message)
+
+            require(fileBytes.size <= npsCapacity) {
+                "E104 payload too large: need ${fileBytes.size} bytes, capacity is $npsCapacity"
+            }
+
+            writeSelectedType4File(
+                session = session,
+                selectFileApdu = SELECT_NPS_FILE,
+                label = "E104",
+                fileBytes = fileBytes,
+                onStatus = onStatus
+            )
+
+            val verifyBytes = readSelectedType4File(session, SELECT_NPS_FILE, "E104", onStatus)
+            NdefCodec.parseType4NdefFile(verifyBytes)
+        }
+    }
+
+    fun writeFullFormattedCard(
+        roJson: String,
+        rwJson: String,
+        onStatus: (String) -> Unit
+    ): FullWriteResult {
+        return reader.withFirstCard(onStatus) { session ->
+            val uid = tryGetUid(session, onStatus)
+            onStatus("Preparing full write for UID ${uid ?: "(unknown)"}")
+
+            selectNdefApplication(session, onStatus)
+
+            val ccBytes = tryReadCcFile(session, onStatus)
+            val npsBytes = tryReadNdefFile(session, SELECT_NPS_FILE, "E104", onStatus)
+            val extraBytes = tryReadNdefFile(session, SELECT_EXTRA_FILE, "E105", onStatus)
+
+            val parsedNps = try {
+                npsBytes?.let { NdefCodec.parseType4NdefFile(it) }
+            } catch (_: Exception) {
+                null
+            }
+
+            val parsedExtra = try {
+                extraBytes?.let { NdefCodec.parseType4NdefFile(it) }
+            } catch (_: Exception) {
+                null
+            }
+
+            val stateBefore = classifyCard(
+                ccBytes = ccBytes,
+                nps = parsedNps,
+                extra = parsedExtra
+            )
+
+            when (stateBefore.kind) {
+                CardStateKind.ERROR -> error("Card classification uncertain. Refusing full write.")
+                CardStateKind.BLANK_OR_UNFORMATTED -> {
+                    if (ccBytes == null) {
+                        error("Card is blank/unformatted. Format/rebuild step is required before full write.")
+                    }
+                }
+                CardStateKind.NATO_FORMATTED,
+                CardStateKind.PARTIAL_OR_UNEXPECTED -> {
+                    onStatus("Proceeding with overwrite in demo mode: ${stateBefore.label}")
+                }
+            }
+
+            val cc = readCcFile(session, onStatus)
+            val npsCapacity = extractMaxSizeFromCc(cc, 0xE104)
+            val extraCapacity = extractMaxSizeFromCc(cc, 0xE105)
+            onStatus("Capacities from CC: E104=$npsCapacity, E105=$extraCapacity")
+
+            val npsWriteAccess = extractWriteAccessFromCc(cc, 0xE104)
+            val extraWriteAccess = extractWriteAccessFromCc(cc, 0xE105)
+            onStatus("Write access from CC: E104=0x${"%02X".format(npsWriteAccess)}, E105=0x${"%02X".format(extraWriteAccess)}")
+
+            require(npsWriteAccess != 0xFF) {
+                "E104 is read-only on this card. Full overwrite requires wipe/rebuild."
+            }
+
+            val npsCompressed = NdefCodec.gzipUtf8(roJson)
+            val npsMessage = NdefCodec.buildSingleMimeMessage(
+                mimeType = "application/x.nps.gzip.v1-0",
+                payload = npsCompressed
+            )
+            val npsFileBytes = NdefCodec.wrapAsType4NdefFile(npsMessage)
+            require(npsFileBytes.size <= npsCapacity) {
+                "E104 payload too large: need ${npsFileBytes.size} bytes, capacity is $npsCapacity"
+            }
+
+            val extraCompressed = NdefCodec.gzipUtf8(rwJson)
+            val extraMessage = NdefCodec.buildSingleMimeMessage(
+                mimeType = "application/x.ext.gzip.v1-0",
+                payload = extraCompressed
+            )
+            val extraFileBytes = NdefCodec.wrapAsType4NdefFile(extraMessage)
+            require(extraFileBytes.size <= extraCapacity) {
+                "E105 payload too large: need ${extraFileBytes.size} bytes, capacity is $extraCapacity"
+            }
+
+            writeSelectedType4File(
+                session = session,
+                selectFileApdu = SELECT_NPS_FILE,
+                label = "E104",
+                fileBytes = npsFileBytes,
+                onStatus = onStatus
+            )
+
+            writeSelectedType4File(
+                session = session,
+                selectFileApdu = SELECT_EXTRA_FILE,
+                label = "E105",
+                fileBytes = extraFileBytes,
+                onStatus = onStatus
+            )
+
+            val verifyNps = NdefCodec.parseType4NdefFile(
+                readSelectedType4File(session, SELECT_NPS_FILE, "E104", onStatus)
+            )
+            val verifyExtra = NdefCodec.parseType4NdefFile(
+                readSelectedType4File(session, SELECT_EXTRA_FILE, "E105", onStatus)
+            )
+
+            FullWriteResult(
+                stateBefore = stateBefore,
+                writtenNps = verifyNps,
+                writtenExtra = verifyExtra
+            )
+        }
     }
 
     fun writeExtraJson(
@@ -113,6 +292,31 @@ class DesfireNdefService(
         }
         onStatus("Selected file E103")
         return readBinary(session, 0, 23)
+    }
+
+    private fun extractWriteAccessFromCc(ccBytes: ByteArray, targetFileId: Int): Int {
+        require(ccBytes.size >= 23) { "CC too short" }
+
+        fun parseTlv(offset: Int): Pair<Int, Int>? {
+            if (ccBytes.size < offset + 8) return null
+            val t = ccBytes[offset].toInt() and 0xFF
+            val l = ccBytes[offset + 1].toInt() and 0xFF
+            if (t != 0x04 || l != 0x06) return null
+
+            val fileId = ((ccBytes[offset + 2].toInt() and 0xFF) shl 8) or
+                    (ccBytes[offset + 3].toInt() and 0xFF)
+            val writeAccess = ccBytes[offset + 7].toInt() and 0xFF
+
+            return fileId to writeAccess
+        }
+
+        val tlv1 = parseTlv(7)
+        val tlv2 = parseTlv(15)
+
+        return listOfNotNull(tlv1, tlv2)
+            .firstOrNull { it.first == targetFileId }
+            ?.second
+            ?: error("File ID 0x${"%04X".format(targetFileId)} not found in CC")
     }
 
     private fun extractMaxSizeFromCc(ccBytes: ByteArray, targetFileId: Int): Int {
@@ -230,6 +434,60 @@ class DesfireNdefService(
         }
     }
 
+    private fun classifyCard(
+        ccBytes: ByteArray?,
+        nps: ParsedNdefPayload?,
+        extra: ParsedNdefPayload?
+    ): CardState {
+        val hasCc = ccBytes != null && ccBytes.size == 23
+        val hasExpectedCc = hasCc && ccLooksLikeNato(ccBytes)
+        val hasNps = nps != null && nps.mimeType == "application/x.nps.gzip.v1-0"
+        val hasExtra = extra != null && extra.mimeType == "application/x.ext.gzip.v1-0"
+
+        return when {
+            hasExpectedCc && hasNps && hasExtra -> CardState(
+                kind = CardStateKind.NATO_FORMATTED,
+                label = "NATO formatted",
+                detail = "CC, E104 and E105 are present and readable.",
+                allowOverwriteForDemo = true
+            )
+
+            !hasCc && !hasNps && !hasExtra -> CardState(
+                kind = CardStateKind.BLANK_OR_UNFORMATTED,
+                label = "Blank / unformatted",
+                detail = "No NATO CC/NDEF structure was detected.",
+                allowOverwriteForDemo = true
+            )
+
+            hasExpectedCc || hasNps || hasExtra -> CardState(
+                kind = CardStateKind.PARTIAL_OR_UNEXPECTED,
+                label = "Partial / unexpected",
+                detail = "Some NATO-like structure was found, but the card is not fully in the expected layout.",
+                allowOverwriteForDemo = true
+            )
+
+            else -> CardState(
+                kind = CardStateKind.ERROR,
+                label = "Unreadable / unknown",
+                detail = "Card could not be confidently classified.",
+                allowOverwriteForDemo = false
+            )
+        }
+    }
+
+    private fun ccLooksLikeNato(ccBytes: ByteArray): Boolean {
+        if (ccBytes.size != 23) return false
+
+        val tlv1FileId = ((ccBytes[9].toInt() and 0xFF) shl 8) or (ccBytes[10].toInt() and 0xFF)
+        val tlv2FileId = ((ccBytes[17].toInt() and 0xFF) shl 8) or (ccBytes[18].toInt() and 0xFF)
+
+        return ccBytes[0] == 0x00.toByte() &&
+                ccBytes[1] == 0x17.toByte() &&
+                ccBytes[2] == 0x20.toByte() &&
+                tlv1FileId == 0xE104 &&
+                tlv2FileId == 0xE105
+    }
+
     fun inspectCard(onStatus: (String) -> Unit): CardInspection {
         return reader.withFirstCard(onStatus) { session ->
             val uid = tryGetUid(session, onStatus)
@@ -255,6 +513,12 @@ class DesfireNdefService(
                 null
             }
 
+            val state = classifyCard(
+                ccBytes = ccBytes,
+                nps = parsedNps,
+                extra = parsedExtra
+            )
+
             CardInspection(
                 readerName = session.readerName,
                 protocol = session.protocol,
@@ -263,7 +527,8 @@ class DesfireNdefService(
                 ccFileHex = ccBytes?.toHex(),
                 ccSummary = ccSummary,
                 nps = parsedNps,
-                extra = parsedExtra
+                extra = parsedExtra,
+                state = state
             )
         }
     }

@@ -11,11 +11,15 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -26,8 +30,8 @@ import kotlinx.coroutines.withContext
 
 private enum class MainTab(val title: String) {
     CARD_INFO("Card Info"),
-    PAYLOAD("Payload"),
-    EDIT_EXTRA("Edit EXTRA"),
+    PAYLOAD("NPS - RO"),
+    EDIT_EXTRA("Edit EXTRA - RW"),
     LOG("Log")
 }
 
@@ -38,12 +42,14 @@ private enum class OperationState {
     ERROR
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun App() {
     MaterialTheme {
         val scope = rememberCoroutineScope()
         val nfcReader = remember { NfcReader() }
         val service = remember { DesfireNdefService(nfcReader) }
+        val api = remember { NpsApiService() }
 
         var cardInfoText by remember { mutableStateOf("(none)") }
         var payloadText by remember { mutableStateOf("(none)") }
@@ -54,7 +60,19 @@ fun App() {
         var operationTitle by remember { mutableStateOf("Ready") }
         var operationMessage by remember { mutableStateOf("Tap an action to begin.") }
 
+        var baseUrl by remember { mutableStateOf("https://ipsmern-dep.azurewebsites.net") }
+        var protectText by remember { mutableStateOf("0") }
+        var availableRecords by remember { mutableStateOf<List<IpsListItem>>(emptyList()) }
+        var selectedRecordId by remember { mutableStateOf("") }
+        var selectedRecordLabel by remember { mutableStateOf("") }
+        var recordMenuExpanded by remember { mutableStateOf(false) }
+
         val logLines = remember { mutableStateListOf("Idle") }
+
+        var fetchedRoJson by remember { mutableStateOf("") }
+        var fetchedRwJson by remember { mutableStateOf("") }
+
+        val adminService = remember { DesfireAdminService(nfcReader) }
 
         fun log(msg: String) {
             logLines.add(msg)
@@ -92,11 +110,140 @@ fun App() {
             horizontalAlignment = Alignment.Start
         ) {
             Text(
-                text = "NATO Patient Summary NFC Desktop POC",
+                text = "NPS-NFC-Desktop",
                 style = MaterialTheme.typography.headlineSmall
             )
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextField(
+                    value = baseUrl,
+                    onValueChange = { baseUrl = it },
+                    label = { Text("Base URL") },
+                    modifier = Modifier.weight(1.4f)
+                )
+
+                TextField(
+                    value = protectText,
+                    onValueChange = { protectText = it },
+                    label = { Text("Protect") },
+                    modifier = Modifier.weight(0.4f)
+                )
+            }
+
+            ExposedDropdownMenuBox(
+                expanded = recordMenuExpanded,
+                onExpandedChange = { recordMenuExpanded = !recordMenuExpanded }
+            ) {
+                TextField(
+                    value = selectedRecordLabel,
+                    onValueChange = {},
+                    readOnly = true,
+                    label = { Text("Available records") },
+                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = recordMenuExpanded) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .menuAnchor()
+                )
+
+                ExposedDropdownMenu(
+                    expanded = recordMenuExpanded,
+                    onDismissRequest = { recordMenuExpanded = false }
+                ) {
+                    availableRecords.forEach { item ->
+                        DropdownMenuItem(
+                            text = { Text(item.displayLabel()) },
+                            onClick = {
+                                selectedRecordId = item.packageUUID
+                                selectedRecordLabel = item.displayLabel()
+                                recordMenuExpanded = false
+                            }
+                        )
+                    }
+                }
+            }
+
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    onClick = {
+                        startOperation("Load API List", "Loading available records...")
+                        scope.launch(Dispatchers.IO) {
+                            try {
+                                val list = api.listRecords(baseUrl)
+                                withContext(Dispatchers.Main) {
+                                    availableRecords = list
+                                    if (list.isNotEmpty()) {
+                                        selectedRecordId = list.first().packageUUID
+                                        selectedRecordLabel = list.first().displayLabel()
+                                    } else {
+                                        selectedRecordId = ""
+                                        selectedRecordLabel = ""
+                                    }
+                                    selectedTab = MainTab.LOG
+                                    succeedOperation("Load API List", "Loaded ${list.size} record(s).")
+                                }
+                            } catch (e: Exception) {
+                                withContext(Dispatchers.Main) {
+                                    selectedTab = MainTab.LOG
+                                    failOperation("Load API List", "${e::class.simpleName}: ${e.message}")
+                                }
+                            }
+                        }
+                    }
+                ) {
+                    Text("Load API List")
+                }
+
+                Button(
+                    onClick = {
+                        startOperation("Fetch API Record", "Fetching selected record...")
+                        scope.launch(Dispatchers.IO) {
+                            try {
+                                require(selectedRecordId.isNotBlank()) { "No record selected" }
+                                val protect = protectText.toIntOrNull() ?: 0
+                                val loaded = api.fetchRecord(baseUrl, selectedRecordId, protect)
+
+                                withContext(Dispatchers.Main) {
+                                    val prettyRo = prettyPrintJson(loaded.roJson)
+                                    val prettyRw = prettyPrintJson(loaded.rwJson)
+
+                                    fetchedRoJson = loaded.roJson
+                                    fetchedRwJson = loaded.rwJson
+
+                                    cardInfoText = buildString {
+                                        appendLine("Source package: ${loaded.meta.id}")
+                                        appendLine("Cutoff: ${loaded.meta.cutoff}")
+                                        appendLine("Protect: ${loaded.meta.protect}")
+                                        appendLine("Encoding: ${loaded.meta.encoding}")
+                                        appendLine("RO JSON bytes: ${loaded.meta.roBytesJson}")
+                                        appendLine("RW JSON bytes: ${loaded.meta.rwBytesJson}")
+                                        appendLine("RO gzip bytes: ${loaded.meta.roBytesGz}")
+                                        appendLine("RW gzip bytes: ${loaded.meta.rwBytesGz}")
+                                    }.trim()
+
+                                    payloadText = buildString {
+                                        appendLine("--- RO / E104 candidate ---")
+                                        appendLine(prettyRo)
+                                        appendLine()
+                                        appendLine("--- RW / E105 candidate ---")
+                                        appendLine(prettyRw)
+                                    }.trim()
+
+                                    payloadEditable = prettyRw
+                                    selectedTab = MainTab.EDIT_EXTRA
+                                    succeedOperation("Fetch API Record", "Record fetched and decoded.")
+                                }
+                            } catch (e: Exception) {
+                                withContext(Dispatchers.Main) {
+                                    selectedTab = MainTab.LOG
+                                    failOperation("Fetch API Record", "${e::class.simpleName}: ${e.message}")
+                                }
+                            }
+                        }
+                    }
+                ) {
+                    Text("Fetch API Record")
+                }
+
                 Button(
                     onClick = {
                         startOperation("Inspect Card", "Waiting for card...")
@@ -130,18 +277,23 @@ fun App() {
                                         ?: ""
 
                                     selectedTab = MainTab.CARD_INFO
-                                    succeedOperation(
-                                        "Inspect Card",
-                                        "Card read successfully."
-                                    )
+                                    val stateMessage = when (inspection.state.kind) {
+                                        CardStateKind.NATO_FORMATTED ->
+                                            "Existing NATO card detected. Overwrite allowed for demo."
+                                        CardStateKind.BLANK_OR_UNFORMATTED ->
+                                            "Blank or unformatted card detected."
+                                        CardStateKind.PARTIAL_OR_UNEXPECTED ->
+                                            "Card has partial/unexpected structure. Overwrite allowed for demo."
+                                        CardStateKind.ERROR ->
+                                            "Card read completed, but classification is uncertain."
+                                    }
+
+                                    succeedOperation("Inspect Card", stateMessage)
                                 }
                             } catch (e: Exception) {
                                 withContext(Dispatchers.Main) {
                                     selectedTab = MainTab.LOG
-                                    failOperation(
-                                        "Inspect Card",
-                                        "${e::class.simpleName}: ${e.message}"
-                                    )
+                                    failOperation("Inspect Card", "${e::class.simpleName}: ${e.message}")
                                 }
                             }
                         }
@@ -170,18 +322,12 @@ fun App() {
                                     }.trim()
 
                                     selectedTab = MainTab.PAYLOAD
-                                    succeedOperation(
-                                        "Read NPS",
-                                        "Historic NPS payload read successfully."
-                                    )
+                                    succeedOperation("Read NPS", "Historic NPS payload read successfully.")
                                 }
                             } catch (e: Exception) {
                                 withContext(Dispatchers.Main) {
                                     selectedTab = MainTab.LOG
-                                    failOperation(
-                                        "Read NPS",
-                                        "${e::class.simpleName}: ${e.message}"
-                                    )
+                                    failOperation("Read NPS", "${e::class.simpleName}: ${e.message}")
                                 }
                             }
                         }
@@ -213,18 +359,12 @@ fun App() {
                                     }.trim()
 
                                     selectedTab = MainTab.EDIT_EXTRA
-                                    succeedOperation(
-                                        "Read EXTRA",
-                                        "Operational payload read successfully."
-                                    )
+                                    succeedOperation("Read EXTRA", "Operational payload read successfully.")
                                 }
                             } catch (e: Exception) {
                                 withContext(Dispatchers.Main) {
                                     selectedTab = MainTab.LOG
-                                    failOperation(
-                                        "Read EXTRA",
-                                        "${e::class.simpleName}: ${e.message}"
-                                    )
+                                    failOperation("Read EXTRA", "${e::class.simpleName}: ${e.message}")
                                 }
                             }
                         }
@@ -258,24 +398,104 @@ fun App() {
                                     }.trim()
 
                                     selectedTab = MainTab.PAYLOAD
-                                    succeedOperation(
-                                        "Write EXTRA",
-                                        "Operational payload written and verified."
-                                    )
+                                    succeedOperation("Write EXTRA", "Operational payload written and verified.")
                                 }
                             } catch (e: Exception) {
                                 withContext(Dispatchers.Main) {
                                     selectedTab = MainTab.LOG
-                                    failOperation(
-                                        "Write EXTRA",
-                                        "${e::class.simpleName}: ${e.message}"
-                                    )
+                                    failOperation("Write EXTRA", "${e::class.simpleName}: ${e.message}")
                                 }
                             }
                         }
                     }
                 ) {
                     Text("Write EXTRA")
+                }
+
+                Button(
+                    onClick = {
+                        startOperation("Write Full Card", "Waiting for card...")
+                        scope.launch(Dispatchers.IO) {
+                            try {
+                                require(fetchedRoJson.isNotBlank()) { "No fetched RO record available. Fetch an API record first." }
+                                require(fetchedRwJson.isNotBlank()) { "No fetched RW record available. Fetch an API record first." }
+
+                                val result = service.writeFullFormattedCard(
+                                    roJson = fetchedRoJson,
+                                    rwJson = fetchedRwJson,
+                                    onStatus = { msg -> scope.launch { log(msg) } }
+                                )
+
+                                withContext(Dispatchers.Main) {
+                                    cardInfoText = result.toDisplayText()
+
+                                    val prettyRo = result.writtenNps.decompressedText
+                                        ?.let(::prettyPrintJson)
+                                        ?: "(RO written, but not decompressed on verify)"
+
+                                    val prettyRw = result.writtenExtra.decompressedText
+                                        ?.let(::prettyPrintJson)
+                                        ?: "(RW written, but not decompressed on verify)"
+
+                                    payloadText = buildString {
+                                        appendLine("--- E104 written/verified ---")
+                                        appendLine(prettyRo)
+                                        appendLine()
+                                        appendLine("--- E105 written/verified ---")
+                                        appendLine(prettyRw)
+                                    }.trim()
+
+                                    payloadEditable = prettyRw
+                                    selectedTab = MainTab.PAYLOAD
+
+                                    val msg = when (result.stateBefore.kind) {
+                                        CardStateKind.NATO_FORMATTED ->
+                                            "Full card written to existing NATO layout."
+                                        CardStateKind.PARTIAL_OR_UNEXPECTED ->
+                                            "Full card written over partial/unexpected layout (demo mode)."
+                                        CardStateKind.BLANK_OR_UNFORMATTED ->
+                                            "Card accepted the full write using existing readable layout."
+                                        CardStateKind.ERROR ->
+                                            "Full write completed."
+                                    }
+
+                                    succeedOperation("Write Full Card", msg)
+                                }
+                            } catch (e: Exception) {
+                                withContext(Dispatchers.Main) {
+                                    selectedTab = MainTab.LOG
+                                    failOperation("Write Full Card", "${e::class.simpleName}: ${e.message}")
+                                }
+                            }
+                        }
+                    }
+                ) {
+                    Text("Write Full Card")
+                }
+
+                Button(
+                    onClick = {
+                        startOperation("Wipe Card", "Preparing destructive wipe...")
+                        scope.launch(Dispatchers.IO) {
+                            try {
+                                adminService.wipeCard { msg ->
+                                    scope.launch { log(msg) }
+                                }
+
+                                withContext(Dispatchers.Main) {
+                                    selectedTab = MainTab.LOG
+                                    succeedOperation("Wipe Card", "Card wiped successfully.")
+                                }
+                            } catch (e: Exception) {
+                                withContext(Dispatchers.Main) {
+                                    selectedTab = MainTab.LOG
+                                    failOperation("Wipe Card", "${e::class.simpleName}: ${e.message}")
+                                }
+                            }
+                        }
+                    }
+                ) {
+                    Text("Wipe Card")
                 }
             }
 
