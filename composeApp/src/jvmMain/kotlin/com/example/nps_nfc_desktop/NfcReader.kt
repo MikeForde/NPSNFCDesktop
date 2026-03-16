@@ -115,8 +115,7 @@ class NfcReader {
                 )
                 onStatus("Card connected. Protocol=${session.protocol}, ATR=${session.atrHex ?: "(none)"}")
                 val result = block(session)
-                onStatus("Operation complete. Remove card...")
-                waitForRemoval(terminal)
+                onStatus("Operation complete. You may remove the card...")
                 return result
             } catch (e: Exception) {
                 onStatus("Card operation error: ${e::class.simpleName}: ${e.message}")

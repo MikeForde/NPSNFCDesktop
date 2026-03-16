@@ -68,97 +68,130 @@ class DesfireNdefService(
         )
     }
 
-    fun inspectCardNative(onStatus: (String) -> Unit): CardInspection {
+    fun writeExtraJson(
+        jsonText: String,
+        onStatus: (String) -> Unit
+    ): ParsedNdefPayload {
         return reader.withFirstCard(onStatus) { session ->
-            val uid = tryGetUid(session, onStatus)
-            val native = DesfireNative(session)
+            selectNdefApplication(session, onStatus)
 
-            val selectResp = native.selectApplication(byteArrayOf(0x00, 0x00, 0x01))
-            require(selectResp.ok) {
-                "Native select app 000001 failed, SW=${"%04X".format(selectResp.sw)}"
-            }
-            onStatus("Native DESFire app select ok (000001)")
+            val ccBytes = readCcFile(session, onStatus)
+            val extraCapacity = extractMaxSizeFromCc(ccBytes, 0xE105)
+            onStatus("E105 capacity from CC: $extraCapacity bytes")
 
-            val ccBytes = tryReadNativeFile(native, 0x01, "E103", 23, onStatus)
-            val ccSummary = ccBytes?.let { summarizeCc(it) }
-
-            val npsBytes = tryReadNativeType4File(native, 0x02, "E104", onStatus)
-            val extraBytes = tryReadNativeType4File(native, 0x03, "E105", onStatus)
-
-            val parsedNps = try {
-                npsBytes?.let { NdefCodec.parseType4NdefFile(it) }
-            } catch (e: Exception) {
-                onStatus("Failed to parse E104 via native read: ${e.message}")
-                null
-            }
-
-            val parsedExtra = try {
-                extraBytes?.let { NdefCodec.parseType4NdefFile(it) }
-            } catch (e: Exception) {
-                onStatus("Failed to parse E105 via native read: ${e.message}")
-                null
-            }
-
-            CardInspection(
-                readerName = session.readerName,
-                protocol = session.protocol,
-                atrHex = session.atrHex,
-                uidHex = uid,
-                ccFileHex = ccBytes?.toHex(),
-                ccSummary = ccSummary,
-                nps = parsedNps,
-                extra = parsedExtra
+            val compressed = NdefCodec.gzipUtf8(jsonText)
+            val message = NdefCodec.buildSingleMimeMessage(
+                mimeType = "application/x.ext.gzip.v1-0",
+                payload = compressed
             )
+            val fileBytes = NdefCodec.wrapAsType4NdefFile(message)
+
+            require(fileBytes.size <= extraCapacity) {
+                "E105 payload too large: need ${fileBytes.size} bytes, capacity is $extraCapacity"
+            }
+
+            writeSelectedType4File(
+                session = session,
+                selectFileApdu = SELECT_EXTRA_FILE,
+                label = "E105",
+                fileBytes = fileBytes,
+                onStatus = onStatus
+            )
+
+            val verifyBytes = readSelectedType4File(session, SELECT_EXTRA_FILE, "E105", onStatus)
+            NdefCodec.parseType4NdefFile(verifyBytes)
         }
     }
 
-    private fun tryReadNativeFile(
-        native: DesfireNative,
-        fileNo: Int,
-        label: String,
-        length: Int,
+    private fun readCcFile(
+        session: NfcReader.CardSession,
         onStatus: (String) -> Unit
-    ): ByteArray? {
-        return try {
-            val resp = native.readData(fileNo, 0, length)
-            require(resp.ok) {
-                "Native read $label failed, SW=${"%04X".format(resp.sw)}"
-            }
-            onStatus("Native read $label bytes=${resp.data.size}")
-            resp.data
-        } catch (e: Exception) {
-            onStatus("Could not native-read $label: ${e.message}")
-            null
+    ): ByteArray {
+        val selectResp = session.transmit(SELECT_CC_FILE)
+        require(selectResp.sw == 0x9000) {
+            "Failed to select E103, SW=${selectResp.swHex()}"
         }
+        onStatus("Selected file E103")
+        return readBinary(session, 0, 23)
     }
 
-    private fun tryReadNativeType4File(
-        native: DesfireNative,
-        fileNo: Int,
+    private fun extractMaxSizeFromCc(ccBytes: ByteArray, targetFileId: Int): Int {
+        require(ccBytes.size >= 23) { "CC too short" }
+
+        fun parseTlv(offset: Int): Pair<Int, Int>? {
+            if (ccBytes.size < offset + 8) return null
+            val t = ccBytes[offset].toInt() and 0xFF
+            val l = ccBytes[offset + 1].toInt() and 0xFF
+            if (t != 0x04 || l != 0x06) return null
+
+            val fileId = ((ccBytes[offset + 2].toInt() and 0xFF) shl 8) or
+                    (ccBytes[offset + 3].toInt() and 0xFF)
+            val maxSize = ((ccBytes[offset + 4].toInt() and 0xFF) shl 8) or
+                    (ccBytes[offset + 5].toInt() and 0xFF)
+
+            return fileId to maxSize
+        }
+
+        val tlv1 = parseTlv(7)
+        val tlv2 = parseTlv(15)
+
+        return listOfNotNull(tlv1, tlv2)
+            .firstOrNull { it.first == targetFileId }
+            ?.second
+            ?: error("File ID 0x${"%04X".format(targetFileId)} not found in CC")
+    }
+
+    private fun writeSelectedType4File(
+        session: NfcReader.CardSession,
+        selectFileApdu: ByteArray,
         label: String,
+        fileBytes: ByteArray,
         onStatus: (String) -> Unit
-    ): ByteArray? {
-        return try {
-            val first = native.readData(fileNo, 0, 2)
-            require(first.ok) {
-                "Native read NLEN for $label failed, SW=${"%04X".format(first.sw)}"
-            }
-            require(first.data.size >= 2) { "Native NLEN read for $label returned <2 bytes" }
+    ) {
+        val selectResp = session.transmit(selectFileApdu)
+        require(selectResp.sw == 0x9000) {
+            "Failed to select $label for write, SW=${selectResp.swHex()}"
+        }
+        onStatus("Selected file $label for write")
 
-            val nlen = ((first.data[0].toInt() and 0xFF) shl 8) or (first.data[1].toInt() and 0xFF)
-            onStatus("Native $label NLEN=$nlen")
+        // Step 1: NLEN = 0
+        updateBinary(session, 0, byteArrayOf(0x00, 0x00))
+        onStatus("$label NLEN cleared")
 
-            val total = 2 + nlen
-            val full = native.readData(fileNo, 0, total)
-            require(full.ok) {
-                "Native full read for $label failed, SW=${"%04X".format(full.sw)}"
-            }
+        // Step 2: write exact [NLEN + NDEF] bytes, no padding
+        var offset = 0
+        val chunkSize = 240
 
-            onStatus("Native $label total bytes=${full.data.size}")
-            full.data
-        } catch (e: Exception) {
-            onStatus("Could not native-read $label: ${e.message}")
-            null
+        while (offset < fileBytes.size) {
+            val end = minOf(offset + chunkSize, fileBytes.size)
+            val chunk = fileBytes.copyOfRange(offset, end)
+            updateBinary(session, offset, chunk)
+            offset = end
+        }
+
+        onStatus("$label write complete (${fileBytes.size} bytes)")
+    }
+
+    private fun updateBinary(
+        session: NfcReader.CardSession,
+        offset: Int,
+        data: ByteArray
+    ) {
+        require(offset in 0..0xFFFF) { "Offset out of range for UPDATE BINARY: $offset" }
+        require(data.isNotEmpty()) { "UPDATE BINARY data must not be empty" }
+        require(data.size <= 255) { "UPDATE BINARY chunk too large: ${data.size}" }
+
+        val apdu = ByteArray(5 + data.size)
+        apdu[0] = 0x00
+        apdu[1] = 0xD6.toByte()
+        apdu[2] = ((offset shr 8) and 0xFF).toByte()
+        apdu[3] = (offset and 0xFF).toByte()
+        apdu[4] = data.size.toByte()
+        System.arraycopy(data, 0, apdu, 5, data.size)
+
+        val response = session.transmit(apdu)
+        require(response.sw == 0x9000) {
+            "UPDATE BINARY failed at offset=$offset, SW=${response.swHex()}"
         }
     }
 
@@ -276,25 +309,6 @@ class DesfireNdefService(
                 null
             }
         } catch (_: Exception) {
-            null
-        }
-    }
-
-    private fun tryReadSelectedFile(
-        session: NfcReader.CardSession,
-        selectFileApdu: ByteArray,
-        onStatus: (String) -> Unit
-    ): ByteArray? {
-        return try {
-            val fileName = when {
-                selectFileApdu.contentEquals(SELECT_CC_FILE) -> "E103"
-                selectFileApdu.contentEquals(SELECT_NPS_FILE) -> "E104"
-                selectFileApdu.contentEquals(SELECT_EXTRA_FILE) -> "E105"
-                else -> "file"
-            }
-            readSelectedType4File(session, selectFileApdu, fileName, onStatus)
-        } catch (e: Exception) {
-            onStatus("Could not read file: ${e.message}")
             null
         }
     }

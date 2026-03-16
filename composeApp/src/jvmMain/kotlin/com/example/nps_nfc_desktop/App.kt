@@ -5,12 +5,15 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.runtime.*
@@ -21,6 +24,20 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+private enum class MainTab(val title: String) {
+    CARD_INFO("Card Info"),
+    PAYLOAD("Payload"),
+    EDIT_EXTRA("Edit EXTRA"),
+    LOG("Log")
+}
+
+private enum class OperationState {
+    IDLE,
+    WORKING,
+    SUCCESS,
+    ERROR
+}
+
 @Composable
 fun App() {
     MaterialTheme {
@@ -30,13 +47,41 @@ fun App() {
 
         var cardInfoText by remember { mutableStateOf("(none)") }
         var payloadText by remember { mutableStateOf("(none)") }
-        val statusLines = remember { mutableStateListOf("Idle") }
+        var payloadEditable by remember { mutableStateOf("") }
+        var selectedTab by remember { mutableStateOf(MainTab.CARD_INFO) }
+
+        var operationState by remember { mutableStateOf(OperationState.IDLE) }
+        var operationTitle by remember { mutableStateOf("Ready") }
+        var operationMessage by remember { mutableStateOf("Tap an action to begin.") }
+
+        val logLines = remember { mutableStateListOf("Idle") }
 
         fun log(msg: String) {
-            statusLines.add(msg)
-            while (statusLines.size > 80) {
-                statusLines.removeAt(0)
+            logLines.add(msg)
+            while (logLines.size > 120) {
+                logLines.removeAt(0)
             }
+        }
+
+        fun startOperation(title: String, message: String) {
+            operationState = OperationState.WORKING
+            operationTitle = title
+            operationMessage = message
+            log("$title: started")
+        }
+
+        fun succeedOperation(title: String, message: String) {
+            operationState = OperationState.SUCCESS
+            operationTitle = title
+            operationMessage = message
+            log("$title: success")
+        }
+
+        fun failOperation(title: String, message: String) {
+            operationState = OperationState.ERROR
+            operationTitle = title
+            operationMessage = message
+            log("$title: error - $message")
         }
 
         Column(
@@ -47,13 +92,14 @@ fun App() {
             horizontalAlignment = Alignment.Start
         ) {
             Text(
-                text = "NPS-NFC-Desktop",
+                text = "NATO Patient Summary NFC Desktop POC",
                 style = MaterialTheme.typography.headlineSmall
             )
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(
                     onClick = {
+                        startOperation("Inspect Card", "Waiting for card...")
                         scope.launch(Dispatchers.IO) {
                             try {
                                 val inspection = service.inspectCard { msg ->
@@ -62,25 +108,40 @@ fun App() {
 
                                 withContext(Dispatchers.Main) {
                                     cardInfoText = inspection.toDisplayText()
+
+                                    val prettyNps = inspection.nps?.decompressedText
+                                        ?.let(::prettyPrintJson)
+                                        ?: "(not available)"
+
+                                    val prettyExtra = inspection.extra?.decompressedText
+                                        ?.let(::prettyPrintJson)
+                                        ?: "(not available)"
+
                                     payloadText = buildString {
                                         appendLine("--- NPS (E104) ---")
-                                        appendLine(
-                                            inspection.nps?.decompressedText?.let(::prettyPrintJson)
-                                                ?: "(not available)"
-                                        )
+                                        appendLine(prettyNps)
                                         appendLine()
                                         appendLine("--- EXTRA (E105) ---")
-                                        appendLine(
-                                            inspection.extra?.decompressedText?.let(::prettyPrintJson)
-                                                ?: "(not available)"
-                                        )
+                                        appendLine(prettyExtra)
                                     }.trim()
 
-                                    log("Inspection complete.")
+                                    payloadEditable = inspection.extra?.decompressedText
+                                        ?.let(::prettyPrintJson)
+                                        ?: ""
+
+                                    selectedTab = MainTab.CARD_INFO
+                                    succeedOperation(
+                                        "Inspect Card",
+                                        "Card read successfully."
+                                    )
                                 }
                             } catch (e: Exception) {
                                 withContext(Dispatchers.Main) {
-                                    log("Inspect error: ${e::class.simpleName}: ${e.message}")
+                                    selectedTab = MainTab.LOG
+                                    failOperation(
+                                        "Inspect Card",
+                                        "${e::class.simpleName}: ${e.message}"
+                                    )
                                 }
                             }
                         }
@@ -91,6 +152,7 @@ fun App() {
 
                 Button(
                     onClick = {
+                        startOperation("Read NPS", "Waiting for card...")
                         scope.launch(Dispatchers.IO) {
                             try {
                                 val parsed = service.readNps { msg ->
@@ -107,11 +169,19 @@ fun App() {
                                         appendLine("Compressed bytes: ${parsed.compressedPayload.size}")
                                     }.trim()
 
-                                    log("NPS read complete.")
+                                    selectedTab = MainTab.PAYLOAD
+                                    succeedOperation(
+                                        "Read NPS",
+                                        "Historic NPS payload read successfully."
+                                    )
                                 }
                             } catch (e: Exception) {
                                 withContext(Dispatchers.Main) {
-                                    log("Read NPS error: ${e::class.simpleName}: ${e.message}")
+                                    selectedTab = MainTab.LOG
+                                    failOperation(
+                                        "Read NPS",
+                                        "${e::class.simpleName}: ${e.message}"
+                                    )
                                 }
                             }
                         }
@@ -122,6 +192,7 @@ fun App() {
 
                 Button(
                     onClick = {
+                        startOperation("Read EXTRA", "Waiting for card...")
                         scope.launch(Dispatchers.IO) {
                             try {
                                 val parsed = service.readExtra { msg ->
@@ -129,20 +200,31 @@ fun App() {
                                 }
 
                                 withContext(Dispatchers.Main) {
-                                    payloadText = parsed.decompressedText
+                                    val pretty = parsed.decompressedText
                                         ?.let(::prettyPrintJson)
                                         ?: "(Payload read, but not decompressed)"
+
+                                    payloadText = pretty
+                                    payloadEditable = pretty
 
                                     cardInfoText = buildString {
                                         appendLine("EXTRA MIME: ${parsed.mimeType}")
                                         appendLine("Compressed bytes: ${parsed.compressedPayload.size}")
                                     }.trim()
 
-                                    log("EXTRA read complete.")
+                                    selectedTab = MainTab.EDIT_EXTRA
+                                    succeedOperation(
+                                        "Read EXTRA",
+                                        "Operational payload read successfully."
+                                    )
                                 }
                             } catch (e: Exception) {
                                 withContext(Dispatchers.Main) {
-                                    log("Read EXTRA error: ${e::class.simpleName}: ${e.message}")
+                                    selectedTab = MainTab.LOG
+                                    failOperation(
+                                        "Read EXTRA",
+                                        "${e::class.simpleName}: ${e.message}"
+                                    )
                                 }
                             }
                         }
@@ -150,39 +232,168 @@ fun App() {
                 ) {
                     Text("Read EXTRA")
                 }
+
+                Button(
+                    onClick = {
+                        startOperation("Write EXTRA", "Waiting for card...")
+                        scope.launch(Dispatchers.IO) {
+                            try {
+                                val parsed = service.writeExtraJson(
+                                    jsonText = payloadEditable,
+                                    onStatus = { msg -> scope.launch { log(msg) } }
+                                )
+
+                                withContext(Dispatchers.Main) {
+                                    val pretty = parsed.decompressedText
+                                        ?.let(::prettyPrintJson)
+                                        ?: "(Payload written, but not decompressed on verify)"
+
+                                    payloadText = pretty
+                                    payloadEditable = pretty
+
+                                    cardInfoText = buildString {
+                                        appendLine("EXTRA MIME: ${parsed.mimeType}")
+                                        appendLine("Compressed bytes: ${parsed.compressedPayload.size}")
+                                        appendLine("Write/verify: OK")
+                                    }.trim()
+
+                                    selectedTab = MainTab.PAYLOAD
+                                    succeedOperation(
+                                        "Write EXTRA",
+                                        "Operational payload written and verified."
+                                    )
+                                }
+                            } catch (e: Exception) {
+                                withContext(Dispatchers.Main) {
+                                    selectedTab = MainTab.LOG
+                                    failOperation(
+                                        "Write EXTRA",
+                                        "${e::class.simpleName}: ${e.message}"
+                                    )
+                                }
+                            }
+                        }
+                    }
+                ) {
+                    Text("Write EXTRA")
+                }
             }
 
-            Text("Card Info", style = MaterialTheme.typography.titleMedium)
-            TextField(
-                value = cardInfoText,
-                onValueChange = {},
-                readOnly = true,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(200.dp)
-                    .verticalScroll(rememberScrollState())
+            OperationBanner(
+                state = operationState,
+                title = operationTitle,
+                message = operationMessage
             )
 
-            Text("Payload", style = MaterialTheme.typography.titleMedium)
-            TextField(
-                value = payloadText,
-                onValueChange = {},
-                readOnly = true,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(320.dp)
-                    .verticalScroll(rememberScrollState())
-            )
+            TabRow(selectedTabIndex = selectedTab.ordinal) {
+                MainTab.entries.forEach { tab ->
+                    Tab(
+                        selected = selectedTab == tab,
+                        onClick = { selectedTab = tab },
+                        text = { Text(tab.title) }
+                    )
+                }
+            }
 
-            Text("Status", style = MaterialTheme.typography.titleMedium)
-            TextField(
-                value = statusLines.joinToString("\n"),
-                onValueChange = {},
-                readOnly = true,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(180.dp)
-                    .verticalScroll(rememberScrollState())
+            when (selectedTab) {
+                MainTab.CARD_INFO -> {
+                    TextField(
+                        value = cardInfoText,
+                        onValueChange = {},
+                        readOnly = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f)
+                            .verticalScroll(rememberScrollState())
+                    )
+                }
+
+                MainTab.PAYLOAD -> {
+                    TextField(
+                        value = payloadText,
+                        onValueChange = {},
+                        readOnly = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f)
+                            .verticalScroll(rememberScrollState())
+                    )
+                }
+
+                MainTab.EDIT_EXTRA -> {
+                    TextField(
+                        value = payloadEditable,
+                        onValueChange = { payloadEditable = it },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f)
+                            .verticalScroll(rememberScrollState())
+                    )
+                }
+
+                MainTab.LOG -> {
+                    TextField(
+                        value = logLines.joinToString("\n"),
+                        onValueChange = {},
+                        readOnly = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f)
+                            .verticalScroll(rememberScrollState())
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun OperationBanner(
+    state: OperationState,
+    title: String,
+    message: String
+) {
+    val colorScheme = MaterialTheme.colorScheme
+
+    val containerColor = when (state) {
+        OperationState.IDLE -> colorScheme.surfaceVariant
+        OperationState.WORKING -> colorScheme.secondaryContainer
+        OperationState.SUCCESS -> colorScheme.primaryContainer
+        OperationState.ERROR -> colorScheme.errorContainer
+    }
+
+    val contentColor = when (state) {
+        OperationState.IDLE -> colorScheme.onSurfaceVariant
+        OperationState.WORKING -> colorScheme.onSecondaryContainer
+        OperationState.SUCCESS -> colorScheme.onPrimaryContainer
+        OperationState.ERROR -> colorScheme.onErrorContainer
+    }
+
+    val stateLabel = when (state) {
+        OperationState.IDLE -> "Idle"
+        OperationState.WORKING -> "Working"
+        OperationState.SUCCESS -> "Success"
+        OperationState.ERROR -> "Error"
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = containerColor,
+            contentColor = contentColor
+        )
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Text(
+                text = "$stateLabel — $title",
+                style = MaterialTheme.typography.titleMedium
+            )
+            Text(
+                text = message,
+                style = MaterialTheme.typography.bodyMedium
             )
         }
     }
@@ -247,7 +458,6 @@ private fun prettyPrintJson(input: String): String {
             }
 
             ch.isWhitespace() -> {
-                // skip original whitespace outside strings
             }
 
             else -> {
