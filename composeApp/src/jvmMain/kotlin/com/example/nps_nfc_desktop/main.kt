@@ -13,7 +13,7 @@ fun main() {
             onCloseRequest = ::exitApplication,
             title = "NPSNFCDesktop",
             state = rememberWindowState(
-                width = 1200.dp,
+                width = 1400.dp,
                 height = 1050.dp
             )
         ) {

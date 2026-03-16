@@ -50,6 +50,26 @@ class NpsApiService {
         ignoreUnknownKeys = true
     }
 
+    fun createOrMergeBundle(baseUrl: String, bundleJson: String): String {
+        return httpPostJson(
+            url = normalizeBaseUrl(baseUrl) + "/ipsbundle",
+            jsonBody = bundleJson
+        )
+    }
+
+    fun tryFetchRecord(baseUrl: String, id: String, protect: Int): LoadedApiRecord? {
+        return try {
+            fetchRecord(baseUrl, id, protect)
+        } catch (e: Exception) {
+            val msg = e.message ?: ""
+            if (msg.contains("HTTP 404") || msg.contains("HTTP 400")) {
+                null
+            } else {
+                throw e
+            }
+        }
+    }
+
     fun listRecords(baseUrl: String): List<IpsListItem> {
         val body = httpGet(normalizeBaseUrl(baseUrl) + "/ips/list")
 
@@ -104,6 +124,42 @@ class NpsApiService {
         }
 
         return try {
+            val status = connection.responseCode
+            val stream = if (status in 200..299) {
+                connection.inputStream
+            } else {
+                connection.errorStream ?: error("HTTP $status with no response body")
+            }
+
+            val text = stream.bufferedReader(StandardCharsets.UTF_8).use { it.readText() }
+
+            require(status in 200..299) {
+                "Request failed: HTTP $status${if (text.isNotBlank()) " - $text" else ""}"
+            }
+
+            text
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    private fun httpPostJson(url: String, jsonBody: String): String {
+        val connection = (URL(url).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 20000
+            readTimeout = 20000
+            doOutput = true
+            setRequestProperty("Accept", "application/json")
+            setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            setRequestProperty("Connection", "close")
+            instanceFollowRedirects = true
+        }
+
+        return try {
+            connection.outputStream.use { out ->
+                out.write(jsonBody.toByteArray(StandardCharsets.UTF_8))
+            }
+
             val status = connection.responseCode
             val stream = if (status in 200..299) {
                 connection.inputStream
