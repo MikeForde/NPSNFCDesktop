@@ -102,151 +102,6 @@ class DesfireNdefService(
         )
     }
 
-    fun writeNpsJson(
-        jsonText: String,
-        onStatus: (String) -> Unit
-    ): ParsedNdefPayload {
-        return reader.withFirstCard(onStatus) { session ->
-            selectNdefApplication(session, onStatus)
-
-            val ccBytes = readCcFile(session, onStatus)
-            val npsCapacity = extractMaxSizeFromCc(ccBytes, 0xE104)
-            onStatus("E104 capacity from CC: $npsCapacity bytes")
-
-            val compressed = NdefCodec.gzipUtf8(jsonText)
-            val message = NdefCodec.buildSingleMimeMessage(
-                mimeType = "application/x.nps.gzip.v1-0",
-                payload = compressed
-            )
-            val fileBytes = NdefCodec.wrapAsType4NdefFile(message)
-
-            require(fileBytes.size <= npsCapacity) {
-                "E104 payload too large: need ${fileBytes.size} bytes, capacity is $npsCapacity"
-            }
-
-            writeSelectedType4File(
-                session = session,
-                selectFileApdu = SELECT_NPS_FILE,
-                label = "E104",
-                fileBytes = fileBytes,
-                onStatus = onStatus
-            )
-
-            val verifyBytes = readSelectedType4File(session, SELECT_NPS_FILE, "E104", onStatus)
-            NdefCodec.parseType4NdefFile(verifyBytes)
-        }
-    }
-
-    fun writeFullFormattedCard(
-        roJson: String,
-        rwJson: String,
-        onStatus: (String) -> Unit
-    ): FullWriteResult {
-        return reader.withFirstCard(onStatus) { session ->
-            val uid = tryGetUid(session, onStatus)
-            onStatus("Preparing full write for UID ${uid ?: "(unknown)"}")
-
-            selectNdefApplication(session, onStatus)
-
-            val ccBytes = tryReadCcFile(session, onStatus)
-            val npsBytes = tryReadNdefFile(session, SELECT_NPS_FILE, "E104", onStatus)
-            val extraBytes = tryReadNdefFile(session, SELECT_EXTRA_FILE, "E105", onStatus)
-
-            val parsedNps = try {
-                npsBytes?.let { NdefCodec.parseType4NdefFile(it) }
-            } catch (_: Exception) {
-                null
-            }
-
-            val parsedExtra = try {
-                extraBytes?.let { NdefCodec.parseType4NdefFile(it) }
-            } catch (_: Exception) {
-                null
-            }
-
-            val stateBefore = classifyCard(
-                ccBytes = ccBytes,
-                nps = parsedNps,
-                extra = parsedExtra
-            )
-
-            when (stateBefore.kind) {
-                CardStateKind.ERROR -> error("Card classification uncertain. Refusing full write.")
-                CardStateKind.BLANK_OR_UNFORMATTED -> {
-                    if (ccBytes == null) {
-                        error("Card is blank/unformatted. Format/rebuild step is required before full write.")
-                    }
-                }
-                CardStateKind.NATO_FORMATTED,
-                CardStateKind.PARTIAL_OR_UNEXPECTED -> {
-                    onStatus("Proceeding with overwrite in demo mode: ${stateBefore.label}")
-                }
-            }
-
-            val cc = readCcFile(session, onStatus)
-            val npsCapacity = extractMaxSizeFromCc(cc, 0xE104)
-            val extraCapacity = extractMaxSizeFromCc(cc, 0xE105)
-            onStatus("Capacities from CC: E104=$npsCapacity, E105=$extraCapacity")
-
-            val npsWriteAccess = extractWriteAccessFromCc(cc, 0xE104)
-            val extraWriteAccess = extractWriteAccessFromCc(cc, 0xE105)
-            onStatus("Write access from CC: E104=0x${"%02X".format(npsWriteAccess)}, E105=0x${"%02X".format(extraWriteAccess)}")
-
-            require(npsWriteAccess != 0xFF) {
-                "E104 is read-only on this card. Full overwrite requires wipe/rebuild."
-            }
-
-            val npsCompressed = NdefCodec.gzipUtf8(roJson)
-            val npsMessage = NdefCodec.buildSingleMimeMessage(
-                mimeType = "application/x.nps.gzip.v1-0",
-                payload = npsCompressed
-            )
-            val npsFileBytes = NdefCodec.wrapAsType4NdefFile(npsMessage)
-            require(npsFileBytes.size <= npsCapacity) {
-                "E104 payload too large: need ${npsFileBytes.size} bytes, capacity is $npsCapacity"
-            }
-
-            val extraCompressed = NdefCodec.gzipUtf8(rwJson)
-            val extraMessage = NdefCodec.buildSingleMimeMessage(
-                mimeType = "application/x.ext.gzip.v1-0",
-                payload = extraCompressed
-            )
-            val extraFileBytes = NdefCodec.wrapAsType4NdefFile(extraMessage)
-            require(extraFileBytes.size <= extraCapacity) {
-                "E105 payload too large: need ${extraFileBytes.size} bytes, capacity is $extraCapacity"
-            }
-
-            writeSelectedType4File(
-                session = session,
-                selectFileApdu = SELECT_NPS_FILE,
-                label = "E104",
-                fileBytes = npsFileBytes,
-                onStatus = onStatus
-            )
-
-            writeSelectedType4File(
-                session = session,
-                selectFileApdu = SELECT_EXTRA_FILE,
-                label = "E105",
-                fileBytes = extraFileBytes,
-                onStatus = onStatus
-            )
-
-            val verifyNps = NdefCodec.parseType4NdefFile(
-                readSelectedType4File(session, SELECT_NPS_FILE, "E104", onStatus)
-            )
-            val verifyExtra = NdefCodec.parseType4NdefFile(
-                readSelectedType4File(session, SELECT_EXTRA_FILE, "E105", onStatus)
-            )
-
-            FullWriteResult(
-                stateBefore = stateBefore,
-                writtenNps = verifyNps,
-                writtenExtra = verifyExtra
-            )
-        }
-    }
-
     fun writeExtraJson(
         jsonText: String,
         onStatus: (String) -> Unit
@@ -286,37 +141,12 @@ class DesfireNdefService(
         session: NfcReader.CardSession,
         onStatus: (String) -> Unit
     ): ByteArray {
-        val selectResp = session.transmit(SELECT_CC_FILE)
+        val selectResp = session.transmit(SELECT_CC_FILE, onStatus)
         require(selectResp.sw == 0x9000) {
             "Failed to select E103, SW=${selectResp.swHex()}"
         }
         onStatus("Selected file E103")
         return readBinary(session, 0, 23)
-    }
-
-    private fun extractWriteAccessFromCc(ccBytes: ByteArray, targetFileId: Int): Int {
-        require(ccBytes.size >= 23) { "CC too short" }
-
-        fun parseTlv(offset: Int): Pair<Int, Int>? {
-            if (ccBytes.size < offset + 8) return null
-            val t = ccBytes[offset].toInt() and 0xFF
-            val l = ccBytes[offset + 1].toInt() and 0xFF
-            if (t != 0x04 || l != 0x06) return null
-
-            val fileId = ((ccBytes[offset + 2].toInt() and 0xFF) shl 8) or
-                    (ccBytes[offset + 3].toInt() and 0xFF)
-            val writeAccess = ccBytes[offset + 7].toInt() and 0xFF
-
-            return fileId to writeAccess
-        }
-
-        val tlv1 = parseTlv(7)
-        val tlv2 = parseTlv(15)
-
-        return listOfNotNull(tlv1, tlv2)
-            .firstOrNull { it.first == targetFileId }
-            ?.second
-            ?: error("File ID 0x${"%04X".format(targetFileId)} not found in CC")
     }
 
     private fun extractMaxSizeFromCc(ccBytes: ByteArray, targetFileId: Int): Int {
@@ -352,7 +182,7 @@ class DesfireNdefService(
         fileBytes: ByteArray,
         onStatus: (String) -> Unit
     ) {
-        val selectResp = session.transmit(selectFileApdu)
+        val selectResp = session.transmit(selectFileApdu, onStatus)
         require(selectResp.sw == 0x9000) {
             "Failed to select $label for write, SW=${selectResp.swHex()}"
         }
@@ -404,7 +234,7 @@ class DesfireNdefService(
         onStatus: (String) -> Unit
     ): ByteArray? {
         return try {
-            val selectResp = session.transmit(SELECT_CC_FILE)
+            val selectResp = session.transmit(SELECT_CC_FILE, onStatus)
             require(selectResp.sw == 0x9000) {
                 "Failed to select E103, SW=${selectResp.swHex()}"
             }
@@ -497,6 +327,9 @@ class DesfireNdefService(
             val ccSummary = ccBytes?.let { summarizeCc(it) }
 
             val npsBytes = tryReadNdefFile(session, SELECT_NPS_FILE, "E104", onStatus)
+
+            selectNdefApplication(session, onStatus)
+
             val extraBytes = tryReadNdefFile(session, SELECT_EXTRA_FILE, "E105", onStatus)
 
             val parsedNps = try {
@@ -533,6 +366,38 @@ class DesfireNdefService(
         }
     }
 
+//    fun inspectCard(onStatus: (String) -> Unit): CardInspection {
+//        return reader.withFirstCard(onStatus) { session ->
+//            val uid = tryGetUid(session, onStatus)
+//            selectNdefApplication(session, onStatus)
+//
+//            val ccBytes = tryReadCcFile(session, onStatus)
+//            val ccSummary = ccBytes?.let { summarizeCc(it) }
+//
+//            val npsBytes = tryReadNdefFile(session, SELECT_NPS_FILE, "E104", onStatus)
+//
+//            selectNdefApplication(session, onStatus)
+//
+//            val extraBytes = tryReadNdefFile(session, SELECT_EXTRA_FILE, "E105", onStatus)
+//            CardInspection(
+//                readerName = session.readerName,
+//                protocol = session.protocol,
+//                atrHex = session.atrHex,
+//                uidHex = uid,
+//                ccFileHex = null,
+//                ccSummary = null,
+//                nps = null,
+//                extra = null,
+//                state = CardState(
+//                    kind = CardStateKind.ERROR,
+//                    label = "Test only",
+//                    detail = "UID only",
+//                    allowOverwriteForDemo = false
+//                )
+//            )
+//        }
+//    }
+
     fun readNps(onStatus: (String) -> Unit): ParsedNdefPayload {
         return reader.withFirstCard(onStatus) { session ->
             selectNdefApplication(session, onStatus)
@@ -553,7 +418,7 @@ class DesfireNdefService(
         session: NfcReader.CardSession,
         onStatus: (String) -> Unit
     ) {
-        val response = session.transmit(SELECT_NDEF_APP_BY_DF_NAME)
+        val response = session.transmit(SELECT_NDEF_APP_BY_DF_NAME, onStatus)
         require(response.sw == 0x9000) {
             "Failed to select NDEF application by DF name, SW=${response.swHex()}"
         }
@@ -565,7 +430,7 @@ class DesfireNdefService(
         onStatus: (String) -> Unit
     ): String? {
         return try {
-            val response = session.transmit(GET_UID)
+            val response = session.transmit(GET_UID, onStatus)
             if (response.sw == 0x9000 && response.data.isNotEmpty()) {
                 val uid = response.data.toHex()
                 onStatus("UID: $uid")
@@ -584,7 +449,7 @@ class DesfireNdefService(
         label: String,
         onStatus: (String) -> Unit
     ): ByteArray {
-        val selectResp = session.transmit(selectFileApdu)
+        val selectResp = session.transmit(selectFileApdu, onStatus)
         require(selectResp.sw == 0x9000) {
             "Failed to select $label, SW=${selectResp.swHex()}"
         }

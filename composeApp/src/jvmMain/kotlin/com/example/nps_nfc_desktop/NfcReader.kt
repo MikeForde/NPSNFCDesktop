@@ -29,7 +29,14 @@ class NfcReader {
             }
 
         fun transmit(apdu: ByteArray): ResponseAPDU {
+            require(apdu.size >= 4) { "Command APDU too short: ${apdu.size} bytes" }
             return card.basicChannel.transmit(CommandAPDU(apdu))
+        }
+        fun transmit(apdu: ByteArray, onStatus: (String) -> Unit): ResponseAPDU {
+            onStatus("TX APDU len=${apdu.size} hex=${apdu.toHex()}")
+            val response = card.basicChannel.transmit(CommandAPDU(apdu))
+            onStatus("RX APDU len=${response.bytes.size} hex=${response.bytes.toHex()} sw=${"%04X".format(response.sw)}")
+            return response
         }
 
         fun disconnect(reset: Boolean = false) {
@@ -106,32 +113,59 @@ class NfcReader {
                 continue
             }
 
-            var card: Card? = null
+            fun connectAndRun(attempt: Int): T {
+                var card: Card? = null
+                try {
+                    if (attempt > 1) {
+                        onStatus("Retrying card session (attempt $attempt)...")
+                        Thread.sleep(200)
+                    }
+
+                    onStatus("About to connect to card...")
+                    card = terminal.connect("*")
+                    onStatus("Connect succeeded.")
+                    val session = CardSession(
+                        readerName = terminal.name,
+                        card = card
+                    )
+
+                    onStatus("Card connected. Protocol=${session.protocol}, ATR=${session.atrHex ?: "(none)"}")
+                    val result = block(session)
+                    onStatus("Operation complete. You may remove the card...")
+                    return result
+                } finally {
+                    try {
+                        card?.disconnect(true)
+                    } catch (_: Exception) {
+                    }
+                    try {
+                        Thread.sleep(100)
+                    } catch (_: Exception) {
+                    }
+                }
+            }
+
             try {
-                card = terminal.connect("*")
-                val session = CardSession(
-                    readerName = terminal.name,
-                    card = card
-                )
-                onStatus("Card connected. Protocol=${session.protocol}, ATR=${session.atrHex ?: "(none)"}")
-                val result = block(session)
-                onStatus("Operation complete. You may remove the card...")
-                return result
+                return connectAndRun(attempt = 1)
+            } catch (e: IllegalArgumentException) {
+                val msg = e.message.orEmpty()
+
+                if (msg.contains("apdu must be at least 2 bytes long")) {
+                    onStatus("Detected short/empty APDU response after reconnect. Retrying once without requiring card removal...")
+                    try {
+                        return connectAndRun(attempt = 2)
+                    } catch (retryError: Exception) {
+                        onStatus("Retry failed: ${retryError::class.simpleName}: ${retryError.message}")
+                        throw retryError
+                    }
+                }
+
+                onStatus("Card operation error: ${e::class.simpleName}: ${e.message}")
+                throw e
             } catch (e: Exception) {
                 onStatus("Card operation error: ${e::class.simpleName}: ${e.message}")
                 throw e
-            } finally {
-                try {
-                    card?.disconnect(false)
-                } catch (_: Exception) {
-                }
             }
-        }
-    }
-
-    private fun waitForRemoval(terminal: CardTerminal) {
-        while (terminal.isCardPresent) {
-            Thread.sleep(80)
         }
     }
 }
