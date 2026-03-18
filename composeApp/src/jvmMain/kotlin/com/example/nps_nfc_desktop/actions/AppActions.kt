@@ -51,10 +51,10 @@ class AppActions(
     fun loadApiList() = apiActions.loadApiList()
     fun fetchRecord() = apiActions.fetchRecord()
 
-    fun addBloodPressure() = observationEntryActions.addObservation(
-        type = com.example.nps_nfc_desktop.model.ObservationEntryType.BLOOD_PRESSURE,
-        primaryValueText = state.systolicText,
-        secondaryValueText = state.diastolicText
+    fun addSelectedObservation() = observationEntryActions.addObservation(
+        type = state.selectedObservationType,
+        primaryValueText = state.observationValue1Text,
+        secondaryValueText = state.observationValue2Text.takeIf { it.isNotBlank() }
     )
 
     fun inspectCard() = cardDataActions.inspectCard()

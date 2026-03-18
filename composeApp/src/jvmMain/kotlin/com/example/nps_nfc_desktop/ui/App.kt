@@ -20,6 +20,7 @@ import com.example.nps_nfc_desktop.nfc.NfcReader
 import com.example.nps_nfc_desktop.services.NpsApiService
 import com.example.nps_nfc_desktop.actions.AppActions
 import com.example.nps_nfc_desktop.model.AppState
+import com.example.nps_nfc_desktop.model.ObservationEntryType
 
 @Composable
 fun App() {
@@ -95,11 +96,12 @@ fun App() {
             ) {
                 Column(modifier = Modifier.weight(2f)) {
                     CardToolsSection(
-                        systolicText = state.systolicText,
-                        onSystolicChange = { state.systolicText = it },
-                        diastolicText = state.diastolicText,
-                        onDiastolicChange = { state.diastolicText = it },
-                        onAddBloodPressure = { actions.addBloodPressure() },
+                        onAddObservation = {
+                            state.selectedObservationType = ObservationEntryType.BLOOD_PRESSURE
+                            state.observationValue1Text = ""
+                            state.observationValue2Text = ""
+                            state.showAddObservationDialog = true
+                        },
                         onInspectCard = {  actions.inspectCard()  },
                         onSyncCard = { actions.syncCard() },
                         onReadNps = { actions.readNps()  },
@@ -117,6 +119,26 @@ fun App() {
                             state.succeedOperation("Rebuild Card", "Rebuild confirmation cleared.")
                         },
                         onWipeCard = { actions.wipeCard()  }
+                    )
+                }
+
+                if (state.showAddObservationDialog) {
+                    AddObservationDialog(
+                        selectedType = state.selectedObservationType,
+                        onTypeChange = { newType ->
+                            state.selectedObservationType = newType
+                            state.observationValue1Text = ""
+                            state.observationValue2Text = ""
+                        },
+                        value1Text = state.observationValue1Text,
+                        onValue1Change = { state.observationValue1Text = it },
+                        value2Text = state.observationValue2Text,
+                        onValue2Change = { state.observationValue2Text = it },
+                        onDismiss = { state.showAddObservationDialog = false },
+                        onConfirm = {
+                            actions.addSelectedObservation()
+                            state.showAddObservationDialog = false
+                        }
                     )
                 }
             }

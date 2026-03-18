@@ -5,6 +5,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.example.nps_nfc_desktop.services.IpsListItem
+import com.example.nps_nfc_desktop.model.ObservationEntryType
 
 class AppState {
     var cardInfoText by mutableStateOf("(none)")
@@ -44,10 +45,13 @@ class AppState {
     var pendingServerUpdateRwJson by mutableStateOf("")
     var pendingServerUpdateSummary by mutableStateOf("")
 
-    var systolicText by mutableStateOf("120")
-    var diastolicText by mutableStateOf("70")
-
     val logLines = mutableStateListOf("Idle")
+
+    var showAddObservationDialog by mutableStateOf(false)
+
+    var selectedObservationType by mutableStateOf(ObservationEntryType.BLOOD_PRESSURE)
+    var observationValue1Text by mutableStateOf("")
+    var observationValue2Text by mutableStateOf("")
 
     val baseUrlOptions = listOf(
         "https://ipsmern-dep.azurewebsites.net",
