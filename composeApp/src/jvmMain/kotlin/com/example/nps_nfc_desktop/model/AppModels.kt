@@ -1,4 +1,4 @@
-package com.example.nps_nfc_desktop
+package com.example.nps_nfc_desktop.model
 
 enum class MainTab(val title: String) {
     CARD_INFO("Card Info"),

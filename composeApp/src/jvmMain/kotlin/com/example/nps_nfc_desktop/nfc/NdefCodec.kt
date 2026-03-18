@@ -1,4 +1,4 @@
-package com.example.nps_nfc_desktop
+package com.example.nps_nfc_desktop.nfc
 
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream

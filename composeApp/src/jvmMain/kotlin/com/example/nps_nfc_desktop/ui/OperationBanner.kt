@@ -1,4 +1,4 @@
-package com.example.nps_nfc_desktop
+package com.example.nps_nfc_desktop.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -11,6 +11,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.example.nps_nfc_desktop.model.OperationState
 
 @Composable
 fun OperationBanner(

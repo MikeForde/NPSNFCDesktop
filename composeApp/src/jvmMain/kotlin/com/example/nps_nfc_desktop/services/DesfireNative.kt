@@ -1,5 +1,6 @@
-package com.example.nps_nfc_desktop
+package com.example.nps_nfc_desktop.services
 
+import com.example.nps_nfc_desktop.nfc.NfcReader
 import javax.smartcardio.ResponseAPDU
 
 data class NativeDesfireResponse(

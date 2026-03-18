@@ -1,4 +1,4 @@
-package com.example.nps_nfc_desktop
+package com.example.nps_nfc_desktop.ui
 
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -10,6 +10,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import com.example.nps_nfc_desktop.model.MainTab
 
 @Composable
 fun AppTabRow(

@@ -1,4 +1,4 @@
-package com.example.nps_nfc_desktop
+package com.example.nps_nfc_desktop.services
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray

@@ -1,5 +1,8 @@
-package com.example.nps_nfc_desktop
+package com.example.nps_nfc_desktop.services
 
+import com.example.nps_nfc_desktop.nfc.NdefCodec
+import com.example.nps_nfc_desktop.nfc.NfcReader
+import com.example.nps_nfc_desktop.nfc.ParsedNdefPayload
 import javax.smartcardio.ResponseAPDU
 
 data class FullWriteResult(

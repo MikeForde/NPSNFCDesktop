@@ -1,4 +1,4 @@
-package com.example.nps_nfc_desktop
+package com.example.nps_nfc_desktop.nfc
 
 import java.security.Provider
 import java.security.Security
@@ -92,6 +92,33 @@ class NfcReader {
         } catch (e: Exception) {
             onStatus("List terminals error: ${e::class.simpleName}: ${e.message}")
             emptyList()
+        }
+    }
+
+    fun isAnyCardPresent(onStatus: (String) -> Unit): Boolean {
+        val factory = createPcscFactory(onStatus) ?: return false
+
+        val terminals = try {
+            factory.terminals().list()
+        } catch (e: Exception) {
+            onStatus("Card presence check failed: ${e::class.simpleName}: ${e.message}")
+            return false
+        }
+
+        if (terminals.isEmpty()) {
+            onStatus("Card presence check: no PC/SC readers found")
+            return false
+        }
+
+        val terminal = terminals.first()
+
+        return try {
+            val present = terminal.isCardPresent
+            onStatus("Card presence check on ${terminal.name}: $present")
+            present
+        } catch (e: Exception) {
+            onStatus("Card presence check failed on ${terminal.name}: ${e::class.simpleName}: ${e.message}")
+            false
         }
     }
 

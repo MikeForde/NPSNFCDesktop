@@ -1,5 +1,7 @@
-package com.example.nps_nfc_desktop
+package com.example.nps_nfc_desktop.services
 
+import com.example.nps_nfc_desktop.nfc.NdefCodec
+import com.example.nps_nfc_desktop.nfc.NfcReader
 import nfcjlib.core.DESFireEV1
 import nfcjlib.core.DESFireEV1.KeyType
 import kotlin.math.max
