@@ -123,6 +123,8 @@ private fun buildBloodPressureObservationEntry(
                                 add(
                                     buildJsonObject {
                                         put("display", JsonPrimitive("Blood Pressure"))
+                                        put("system", JsonPrimitive("http://snomed.info/sct"))
+                                        put("code", JsonPrimitive("75367002"))
                                     }
                                 )
                             }
