@@ -21,6 +21,8 @@ import com.example.nps_nfc_desktop.services.NpsApiService
 import com.example.nps_nfc_desktop.actions.AppActions
 import com.example.nps_nfc_desktop.model.AppState
 import com.example.nps_nfc_desktop.model.ObservationEntryType
+import com.example.nps_nfc_desktop.services.SimpleNdefReadService
+import com.example.nps_nfc_desktop.services.LegacyService
 
 @Composable
 fun App() {
@@ -32,6 +34,8 @@ fun App() {
         val service = remember { DesfireNdefService(nfcReader) }
         val api = remember { NpsApiService() }
         val adminService = remember { DesfireAdminService(nfcReader) }
+        val simpleNdefService = remember { SimpleNdefReadService() }
+        val legacyService = remember { LegacyService(service) }
 
         val actions = remember(scope, state) {
             AppActions(
@@ -40,7 +44,8 @@ fun App() {
                 nfcReader = nfcReader,
                 service = service,
                 api = api,
-                adminService = adminService
+                adminService = adminService,
+                legacyService = legacyService
             )
         }
 
@@ -158,6 +163,7 @@ fun App() {
                 selectedTab = state.selectedTab,
                 cardInfoText = state.cardInfoText,
                 payloadText = state.payloadText,
+                payloadRoText = state.payloadRoText,
                 payloadEditable = state.payloadEditable,
                 onPayloadEditableChange = { state.payloadEditable = it },
                 logLines = state.logLines

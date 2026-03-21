@@ -11,7 +11,7 @@ enum class ObservationEntryType(
     BLOOD_PRESSURE(
         label = "Blood Pressure",
         display = "Blood Pressure",
-        snomedCode = "",
+        snomedCode = "75367002",
         unit = "mm[Hg]",
         ucumCode = "mm[Hg]",
         isBloodPressure = true

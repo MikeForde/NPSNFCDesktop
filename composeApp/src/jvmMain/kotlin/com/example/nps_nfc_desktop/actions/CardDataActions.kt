@@ -6,20 +6,24 @@ import com.example.nps_nfc_desktop.services.CardStateKind
 import com.example.nps_nfc_desktop.services.DesfireNdefService
 import com.example.nps_nfc_desktop.model.MainTab
 import com.example.nps_nfc_desktop.services.NpsApiService
+import com.example.nps_nfc_desktop.services.LegacyService
 import com.example.nps_nfc_desktop.util.buildApiUpdateCheckResult
 import com.example.nps_nfc_desktop.util.parseBundleSummary
 import com.example.nps_nfc_desktop.util.prettyPrintJson
 import com.example.nps_nfc_desktop.util.protectLabelToValue
+import com.example.nps_nfc_desktop.util.LegacyIpsBundleUtils
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+
 class CardDataActions(
     scope: CoroutineScope,
     state: AppState,
     private val service: DesfireNdefService,
-    private val api: NpsApiService
+    private val api: NpsApiService,
+    private val legacyService: LegacyService
 ) : ActionSupport(scope, state) {
 
     fun inspectCard() {
@@ -31,11 +35,17 @@ class CardDataActions(
 
                 val inspection = service.inspectCard { msg -> log(msg) }
 
-                val cardNpsJson = inspection.nps?.decompressedText
-                val cardExtraJson = inspection.extra?.decompressedText
+                val legacySplit = LegacyIpsBundleUtils.splitLegacyBundleIfNeeded(
+                    mimeType = inspection.nps?.mimeType,
+                    decompressedText = inspection.nps?.decompressedText
+                )
+
+                val normalizedNpsJson = legacySplit?.roJson ?: inspection.nps?.decompressedText
+                val normalizedExtraJson = legacySplit?.rwJson ?: inspection.extra?.decompressedText
+
                 val cardBundleId =
-                    parseBundleSummary(cardNpsJson)?.bundleId
-                        ?: parseBundleSummary(cardExtraJson)?.bundleId
+                    parseBundleSummary(normalizedNpsJson)?.bundleId
+                        ?: parseBundleSummary(normalizedExtraJson)?.bundleId
 
                 var updateCheck: ApiUpdateCheckResult? = null
 
@@ -46,7 +56,7 @@ class CardDataActions(
                         updateCheck = buildApiUpdateCheckResult(
                             fetchedRoJson = loaded.roJson,
                             fetchedRwJson = loaded.rwJson,
-                            cardExtraJson = cardExtraJson
+                            cardExtraJson = normalizedExtraJson
                         )
                     } catch (apiError: Exception) {
                         state.log("Inspect Card: API update check skipped - ${apiError::class.simpleName}: ${apiError.message}")
@@ -56,13 +66,16 @@ class CardDataActions(
                 }
 
                 withContext(Dispatchers.Main) {
-                    state.cardInfoText = inspection.toDisplayText()
+                    state.cardInfoText = inspection.toDisplayText(legacySplit)
 
-                    val prettyNps = inspection.nps?.decompressedText
+                    state.cardWasLegacy = legacySplit != null
+                    state.currentCardRoJson = normalizedNpsJson ?: ""
+
+                    val prettyNps = normalizedNpsJson
                         ?.let(::prettyPrintJson)
                         ?: "(not available)"
 
-                    val prettyExtra = inspection.extra?.decompressedText
+                    val prettyExtra = normalizedExtraJson
                         ?.let(::prettyPrintJson)
                         ?: "(not available)"
 
@@ -74,7 +87,10 @@ class CardDataActions(
                         appendLine(prettyExtra)
                     }.trim()
 
-                    state.payloadEditable = inspection.extra?.decompressedText
+                    state.payloadRoText = prettyNps
+
+
+                    state.payloadEditable = normalizedExtraJson
                         ?.let(::prettyPrintJson)
                         ?: ""
 
@@ -101,15 +117,24 @@ class CardDataActions(
                             state.pendingApiUpdateBundleId = ""
                             state.pendingApiUpdateSummary = ""
 
-                            when (inspection.state.kind) {
-                                CardStateKind.NATO_FORMATTED ->
+                            when {
+                                legacySplit != null ->
+                                    "Legacy IPS card detected. Single-record payload converted to RO/RW view."
+
+                                inspection.state.kind == CardStateKind.NATO_FORMATTED ->
                                     "Existing NATO card detected. No API update result available"
-                                CardStateKind.BLANK_OR_UNFORMATTED ->
+
+                                inspection.state.kind == CardStateKind.BLANK_OR_UNFORMATTED ->
                                     "Blank or unformatted card detected."
-                                CardStateKind.PARTIAL_OR_UNEXPECTED ->
+
+                                inspection.state.kind == CardStateKind.PARTIAL_OR_UNEXPECTED ->
                                     "Card has partial/unexpected structure. No API update result available."
-                                CardStateKind.ERROR ->
+
+                                inspection.state.kind == CardStateKind.ERROR ->
                                     "Card read completed, but classification is uncertain."
+
+                                else ->
+                                    "Card read completed."
                             }
                         }
                     }
@@ -231,27 +256,76 @@ class CardDataActions(
                     else -> error("No pending update available. Run Inspect Card or Sync Card first.")
                 }
 
-                val parsed = service.writeExtraJson(
-                    jsonText = rwToWrite,
-                    onStatus = { msg -> log(msg) }
-                )
+                val wasLegacy = state.cardWasLegacy
+                val currentRoJson = state.currentCardRoJson
+
+                val parsed = if (wasLegacy) {
+                    if (currentRoJson.isBlank()) {
+                        error("Legacy card update requires current RO JSON, but none is available. Read the card again first.")
+                    }
+
+                    val mergedJson = LegacyIpsBundleUtils.joinBundles(
+                        roJson = currentRoJson,
+                        rwJson = rwToWrite
+                    )
+
+                    legacyService.writeLegacyIpsJson(
+                        jsonText = mergedJson,
+                        onStatus = { msg -> log(msg) }
+                    )
+                } else {
+                    service.writeExtraJson(
+                        jsonText = rwToWrite,
+                        onStatus = { msg -> log(msg) }
+                    )
+                }
 
                 withContext(Dispatchers.Main) {
-                    val pretty = parsed.decompressedText
-                        ?.let(::prettyPrintJson)
-                        ?: "(Payload written, but not decompressed on verify)"
+                    val prettyRw = rwToWrite
+                        .let(::prettyPrintJson)
 
-                    state.payloadText = pretty
-                    state.payloadEditable = pretty
-                    state.fetchedRwJson = parsed.decompressedText ?: state.fetchedRwJson
+                    state.payloadEditable = prettyRw
+                    state.fetchedRwJson = rwToWrite
 
-                    state.cardInfoText = buildString {
-                        appendLine("API update applied to E105.")
-                        appendLine("Bundle ID: ${state.pendingApiUpdateBundleId.ifBlank { "(unknown)" }}")
-                        appendLine("EXTRA MIME: ${parsed.mimeType}")
-                        appendLine("Compressed bytes: ${parsed.compressedPayload.size}")
-                        appendLine("Write/verify: OK")
-                    }.trim()
+                    if (wasLegacy) {
+                        val mergedJson = LegacyIpsBundleUtils.joinBundles(
+                            roJson = currentRoJson,
+                            rwJson = rwToWrite
+                        )
+
+                        state.payloadText = buildString {
+                            appendLine("--- NPS (E104) ---")
+                            appendLine(state.payloadRoText.ifBlank { prettyPrintJson(currentRoJson) })
+                            appendLine()
+                            appendLine("--- EXTRA (E105) ---")
+                            appendLine(prettyRw)
+                        }.trim()
+
+                        state.cardInfoText = buildString {
+                            appendLine("API update applied to legacy single-record card.")
+                            appendLine("Bundle ID: ${state.pendingApiUpdateBundleId.ifBlank { "(unknown)" }}")
+                            appendLine("MIME: ${parsed.mimeType}")
+                            appendLine("Compressed bytes: ${parsed.compressedPayload.size}")
+                            appendLine("Write/verify: OK")
+                            appendLine("Handling: Rejoined RO + RW and wrote legacy single NDEF payload")
+                        }.trim()
+                    } else {
+                        state.payloadText = buildString {
+                            appendLine("--- NPS (E104) ---")
+                            appendLine(state.payloadRoText.ifBlank { "(not available)" })
+                            appendLine()
+                            appendLine("--- EXTRA (E105) ---")
+                            appendLine(prettyRw)
+                        }.trim()
+
+                        state.cardInfoText = buildString {
+                            appendLine("API update applied to E105.")
+                            appendLine("Bundle ID: ${state.pendingApiUpdateBundleId.ifBlank { "(unknown)" }}")
+                            appendLine("EXTRA MIME: ${parsed.mimeType}")
+                            appendLine("Compressed bytes: ${parsed.compressedPayload.size}")
+                            appendLine("Write/verify: OK")
+                        }.trim()
+                    }
 
                     state.pendingApiUpdateRwJson = ""
                     state.pendingApiUpdateBundleId = ""
@@ -260,7 +334,14 @@ class CardDataActions(
                     state.pendingServerUpdateSummary = ""
 
                     state.selectedTab = MainTab.PAYLOAD
-                    state.succeedOperation("Apply API Update", "Additional RW data written to card successfully.")
+                    state.succeedOperation(
+                        "Apply API Update",
+                        if (wasLegacy) {
+                            "Legacy card updated successfully."
+                        } else {
+                            "Additional RW data written to card successfully."
+                        }
+                    )
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {

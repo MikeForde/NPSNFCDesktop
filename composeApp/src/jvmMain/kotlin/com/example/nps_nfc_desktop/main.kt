@@ -1,5 +1,8 @@
 package com.example.nps_nfc_desktop
 
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
@@ -13,11 +16,20 @@ fun main() {
             onCloseRequest = ::exitApplication,
             title = "NPSNFCDesktop",
             state = rememberWindowState(
-                width = 1400.dp,
-                height = 1050.dp
+                width = 1100.dp,
+                height = 850.dp
             )
         ) {
-            App()
+            val scale = 0.9f  // 👈 tweak this
+
+            CompositionLocalProvider(
+                LocalDensity provides Density(
+                    density = LocalDensity.current.density * scale,
+                    fontScale = LocalDensity.current.fontScale * scale
+                )
+            ) {
+                App()
+            }
         }
     }
 }

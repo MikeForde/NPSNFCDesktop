@@ -198,6 +198,9 @@ class SyncActions(
                         appendLine(if (finalRwJson.isNotBlank()) prettyPrintJson(finalRwJson) else "(not available)")
                     }.trim()
 
+                    state.payloadRoText = prettyPrintJson(bestRoJson)
+
+
                     if (finalRwJson.isNotBlank()) {
                         state.fetchedRwJson = finalRwJson
                         state.payloadEditable = prettyPrintJson(finalRwJson)

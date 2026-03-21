@@ -187,15 +187,18 @@ fun CardToolsSection(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Button(onClick = onInspectCard) { Text("Inspect") }
+                Button(onClick = onInspectCard) { Text("Read") }
                 Button(onClick = onSyncCard) { Text("Sync") }
-                Button(onClick = onReadNps) { Text("Read NPS") }
-                Button(onClick = onReadExtra) { Text("Read EXTRA") }
+//                Button(onClick = onReadNps) { Text("Read NPS") }
+//                Button(onClick = onReadExtra) { Text("Read EXTRA") }
                 Button(onClick = onWriteExtra) { Text("Write EXTRA") }
                 Button(onClick = onApplyApiUpdate) { Text("Update Card") }
                 Button(onClick = onAddObservation) {
                     Text("Add Ob")
                 }
+//                Button(onClick = onReadSimpleCard) {
+//                    Text("Read Simple")
+//                }
             }
         }
     }

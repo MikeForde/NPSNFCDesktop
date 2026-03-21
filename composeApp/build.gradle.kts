@@ -54,10 +54,14 @@ compose.desktop {
 
         nativeDistributions {
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
-            packageName = "com.example.nps_nfc_desktop"
+            packageName = "NPS NFC Desktop"
             packageVersion = "1.0.0"
 
             modules("java.smartcardio")
+
+            macOS {
+                iconFile.set(project.file("src/jvmMain/resources/icon.icns"))
+            }
         }
     }
 }

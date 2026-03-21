@@ -8,10 +8,17 @@ import com.example.nps_nfc_desktop.services.IpsListItem
 import com.example.nps_nfc_desktop.model.ObservationEntryType
 
 class AppState {
+    var selectedCardMode by mutableStateOf(CardMode.DUAL)
+    var detectedCardMode by mutableStateOf<CardMode?>(null)
+
     var cardInfoText by mutableStateOf("(none)")
     var payloadText by mutableStateOf("(none)")
     var payloadEditable by mutableStateOf("")
+    var payloadRoText by mutableStateOf("")
     var selectedTab by mutableStateOf(MainTab.CARD_INFO)
+
+    var cardWasLegacy by mutableStateOf(false)
+    var currentCardRoJson by mutableStateOf("")
 
     var operationState by mutableStateOf(OperationState.IDLE)
     var operationTitle by mutableStateOf("Ready")

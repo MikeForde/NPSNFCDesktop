@@ -2,9 +2,16 @@ package com.example.nps_nfc_desktop.model
 
 enum class MainTab(val title: String) {
     CARD_INFO("Card Info"),
-    PAYLOAD("NPS - RO"),
+    PAYLOAD("Payload Info"),
+    PAYLOAD_RO("NPS - RO"),
     EDIT_EXTRA("Edit EXTRA - RW"),
     LOG("Log")
+}
+
+enum class CardMode {
+    DUAL,
+    SIMPLE,
+    UNKNOWN
 }
 
 enum class OperationState {

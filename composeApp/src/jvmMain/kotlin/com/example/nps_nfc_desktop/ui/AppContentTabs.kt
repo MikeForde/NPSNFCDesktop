@@ -33,6 +33,7 @@ fun ColumnScope.AppTabContent(
     selectedTab: MainTab,
     cardInfoText: String,
     payloadText: String,
+    payloadRoText: String,
     payloadEditable: String,
     onPayloadEditableChange: (String) -> Unit,
     logLines: List<String>
@@ -53,6 +54,18 @@ fun ColumnScope.AppTabContent(
         MainTab.PAYLOAD -> {
             TextField(
                 value = payloadText,
+                onValueChange = {},
+                readOnly = true,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .verticalScroll(rememberScrollState())
+            )
+        }
+
+        MainTab.PAYLOAD_RO -> {
+            TextField(
+                value = payloadRoText,
                 onValueChange = {},
                 readOnly = true,
                 modifier = Modifier

@@ -4,6 +4,7 @@ import com.example.nps_nfc_desktop.nfc.NdefCodec
 import com.example.nps_nfc_desktop.nfc.NfcReader
 import com.example.nps_nfc_desktop.nfc.ParsedNdefPayload
 import javax.smartcardio.ResponseAPDU
+import com.example.nps_nfc_desktop.util.LegacySplitResult
 
 data class FullWriteResult(
     val stateBefore: CardState,
@@ -33,7 +34,9 @@ data class CardInspection(
     val extra: ParsedNdefPayload?,
     val state: CardState
 ) {
-    fun toDisplayText(): String = buildString {
+    fun toDisplayText(
+        legacySplit: LegacySplitResult? = null
+    ): String = buildString {
         appendLine("Reader: $readerName")
         appendLine("Protocol: $protocol")
         appendLine("ATR: ${atrHex ?: "(none)"}")
@@ -42,25 +45,50 @@ data class CardInspection(
         appendLine("State Detail: ${state.detail}")
         appendLine("CC: ${ccFileHex ?: "(not read)"}")
         appendLine("CC Summary: ${ccSummary ?: "(not parsed)"}")
-        appendLine()
-        appendLine("--- E104 / NPS ---")
-        if (nps == null) {
-            appendLine("(not read)")
-        } else {
-            appendLine("MIME: ${nps.mimeType}")
-            appendLine("Compressed bytes: ${nps.compressedPayload.size}")
+
+        if (legacySplit != null) {
+            appendLine()
+            appendLine("--- Legacy Format Detection ---")
+            appendLine("Legacy single-record IPS card detected")
+            appendLine("Source MIME: ${nps?.mimeType ?: "(unknown)"}")
+            appendLine("Cutoff timestamp: ${legacySplit.cutoffIso}")
+            appendLine("Handling: Converted in app to RO/RW logical view")
+
+            appendLine()
+            appendLine("--- E104 / NPS-RO (derived from legacy payload) ---")
+            appendLine("Source: Legacy single NDEF payload")
+            appendLine("MIME: application/x.ips.gzip.v1-0")
+            appendLine("Compressed bytes: ${nps?.compressedPayload?.size ?: 0}")
             appendLine("JSON:")
-            appendLine(nps.decompressedText ?: "(not gzip or not decoded)")
-        }
-        appendLine()
-        appendLine("--- E105 / EXTRA ---")
-        if (extra == null) {
-            appendLine("(not read)")
-        } else {
-            appendLine("MIME: ${extra.mimeType}")
-            appendLine("Compressed bytes: ${extra.compressedPayload.size}")
+            appendLine(legacySplit.roJson)
+
+            appendLine()
+            appendLine("--- E105 / EXTRA (derived from legacy payload) ---")
+            appendLine("Source: Legacy single NDEF payload")
             appendLine("JSON:")
-            appendLine(extra.decompressedText ?: "(not gzip or not decoded)")
+            appendLine(legacySplit.rwJson)
+        } else {
+            appendLine()
+            appendLine("--- E104 / NPS ---")
+            if (nps == null) {
+                appendLine("(not read)")
+            } else {
+                appendLine("MIME: ${nps.mimeType}")
+                appendLine("Compressed bytes: ${nps.compressedPayload.size}")
+                appendLine("JSON:")
+                appendLine(nps.decompressedText ?: "(not gzip or not decoded)")
+            }
+
+            appendLine()
+            appendLine("--- E105 / EXTRA ---")
+            if (extra == null) {
+                appendLine("(not read)")
+            } else {
+                appendLine("MIME: ${extra.mimeType}")
+                appendLine("Compressed bytes: ${extra.compressedPayload.size}")
+                appendLine("JSON:")
+                appendLine(extra.decompressedText ?: "(not gzip or not decoded)")
+            }
         }
     }.trim()
 }
@@ -536,6 +564,50 @@ class DesfireNdefService(
 
         return "CCLEN=$cclen, version=0x${"%02X".format(version)}, MLe=$mle, MLc=$mlc, $tlv1, $tlv2"
     }
+
+    fun writeLegacySingleRecord(
+        mimeType: String,
+        compressedPayload: ByteArray,
+        originalJson: String,
+        onStatus: (String) -> Unit = {}
+    ): ParsedNdefPayload {
+        return reader.withFirstCard(onStatus) { session ->
+            selectNdefApplication(session, onStatus)
+
+            val message = NdefCodec.buildSingleMimeMessage(
+                mimeType = mimeType,
+                payload = compressedPayload
+            )
+            val fileBytes = NdefCodec.wrapAsType4NdefFile(message)
+
+            onStatus("Legacy write: writing single-record payload to E104 (${fileBytes.size} bytes)")
+
+            writeSelectedType4File(
+                session = session,
+                selectFileApdu = SELECT_NPS_FILE,
+                label = "E104",
+                fileBytes = fileBytes,
+                onStatus = onStatus
+            )
+
+            onStatus("Legacy single-record payload written to E104")
+
+            val verifyBytes = readSelectedType4File(session, SELECT_NPS_FILE, "E104", onStatus)
+            val parsed = NdefCodec.parseType4NdefFile(verifyBytes)
+
+            require(parsed.mimeType == mimeType) {
+                "Legacy verify failed: expected MIME $mimeType but found ${parsed.mimeType}"
+            }
+
+            if (parsed.decompressedText != null) {
+                require(parsed.decompressedText == originalJson) {
+                    "Legacy verify failed: decompressed JSON does not match written JSON"
+                }
+            }
+
+            parsed
+        }
+    }
 }
 
 private fun ResponseAPDU.swHex(): String =
@@ -549,3 +621,4 @@ private fun hex(value: String): ByteArray {
     require(clean.length % 2 == 0) { "Hex string must have even length" }
     return clean.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
 }
+

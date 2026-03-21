@@ -5,6 +5,7 @@ import com.example.nps_nfc_desktop.services.DesfireAdminService
 import com.example.nps_nfc_desktop.services.DesfireNdefService
 import com.example.nps_nfc_desktop.nfc.NfcReader
 import com.example.nps_nfc_desktop.services.NpsApiService
+import com.example.nps_nfc_desktop.services.LegacyService
 import kotlinx.coroutines.CoroutineScope
 
 class AppActions(
@@ -13,7 +14,8 @@ class AppActions(
     nfcReader: NfcReader,
     service: DesfireNdefService,
     api: NpsApiService,
-    adminService: DesfireAdminService
+    adminService: DesfireAdminService,
+    legacyService: LegacyService
 ) {
     private val apiActions = ApiActions(
         scope = scope,
@@ -38,7 +40,8 @@ class AppActions(
         scope = scope,
         state = state,
         service = service,
-        api = api
+        api = api,
+        legacyService = legacyService
     )
 
     private val cardAdminActions = CardAdminActions(

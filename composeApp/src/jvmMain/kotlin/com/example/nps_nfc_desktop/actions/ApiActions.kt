@@ -77,6 +77,8 @@ class ApiActions(
                         appendLine(prettyRw)
                     }.trim()
 
+                    state.payloadRoText = prettyRo
+
                     state.payloadEditable = prettyRw
                     state.selectedTab = MainTab.EDIT_EXTRA
                     state.succeedOperation("Fetch Record", "Record fetched and decoded.")
