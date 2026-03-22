@@ -300,30 +300,50 @@ class DesfireNdefService(
         nps: ParsedNdefPayload?,
         extra: ParsedNdefPayload?
     ): CardState {
-        val hasCc = ccBytes != null && ccBytes.size == 23
-        val hasExpectedCc = hasCc && ccLooksLikeNato(ccBytes)
-        val hasNps = nps != null && nps.mimeType == "application/x.nps.gzip.v1-0"
-        val hasExtra = extra != null && extra.mimeType == "application/x.ext.gzip.v1-0"
+        val hasAnyCc = ccBytes != null
+        val hasAnyNps = nps != null
+        val hasAnyExtra = extra != null
+
+        val hasNatoCc = ccBytes?.size == 23 && ccLooksLikeNato(ccBytes)
+        val hasLegacyCc = ccBytes?.size == 15 && ccLooksLikeLegacy(ccBytes)
+
+        val hasNatoNps = nps?.mimeType == "application/x.nps.gzip.v1-0"
+        val hasNatoExtra = extra?.mimeType == "application/x.ext.gzip.v1-0"
+        val hasLegacyIps = nps?.mimeType == "application/x.ips.gzip.v1-0"
 
         return when {
-            hasExpectedCc && hasNps && hasExtra -> CardState(
+            hasNatoCc && hasNatoNps && hasNatoExtra -> CardState(
                 kind = CardStateKind.NATO_FORMATTED,
                 label = "NATO formatted",
                 detail = "CC, E104 and E105 are present and readable.",
                 allowOverwriteForDemo = true
             )
 
-            !hasCc && !hasNps && !hasExtra -> CardState(
-                kind = CardStateKind.BLANK_OR_UNFORMATTED,
-                label = "Blank / unformatted",
-                detail = "No NATO CC/NDEF structure was detected.",
+            hasLegacyCc && hasLegacyIps && !hasAnyExtra -> CardState(
+                kind = CardStateKind.NATO_FORMATTED,
+                label = "Legacy formatted",
+                detail = "Legacy CC and single E104 payload are present and readable.",
                 allowOverwriteForDemo = true
             )
 
-            hasExpectedCc || hasNps || hasExtra -> CardState(
+            hasLegacyIps && !hasAnyExtra -> CardState(
+                kind = CardStateKind.PARTIAL_OR_UNEXPECTED,
+                label = "Legacy formatted",
+                detail = "Legacy single E104 payload detected, but CC was not read.",
+                allowOverwriteForDemo = true
+            )
+
+            !hasAnyCc && !hasAnyNps && !hasAnyExtra -> CardState(
+                kind = CardStateKind.BLANK_OR_UNFORMATTED,
+                label = "Blank / unformatted",
+                detail = "No CC/NDEF structure was detected.",
+                allowOverwriteForDemo = true
+            )
+
+            hasAnyCc || hasAnyNps || hasAnyExtra -> CardState(
                 kind = CardStateKind.PARTIAL_OR_UNEXPECTED,
                 label = "Partial / unexpected",
-                detail = "Some NATO-like structure was found, but the card is not fully in the expected layout.",
+                detail = "Some card structure was found, but the card is not fully in the expected layout.",
                 allowOverwriteForDemo = true
             )
 
@@ -347,6 +367,18 @@ class DesfireNdefService(
                 ccBytes[2] == 0x20.toByte() &&
                 tlv1FileId == 0xE104 &&
                 tlv2FileId == 0xE105
+    }
+
+    private fun ccLooksLikeLegacy(cc: ByteArray): Boolean {
+        if (cc.size != 15) return false
+
+        return (cc[0].toInt() and 0xFF) == 0x00 &&
+                (cc[1].toInt() and 0xFF) == 0x0F &&
+                (cc[2].toInt() and 0xFF) == 0x20 &&
+                (cc[7].toInt() and 0xFF) == 0x04 &&
+                (cc[8].toInt() and 0xFF) == 0x06 &&
+                (cc[9].toInt() and 0xFF) == 0xE1 &&
+                (cc[10].toInt() and 0xFF) == 0x04
     }
 
     fun inspectCard(onStatus: (String) -> Unit): CardInspection {
