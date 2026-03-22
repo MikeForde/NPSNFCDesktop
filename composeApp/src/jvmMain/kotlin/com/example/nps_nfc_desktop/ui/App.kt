@@ -25,10 +25,9 @@ import com.example.nps_nfc_desktop.services.SimpleNdefReadService
 import com.example.nps_nfc_desktop.services.LegacyService
 
 @Composable
-fun App() {
+fun App(state: AppState) {
     MaterialTheme {
         val scope = rememberCoroutineScope()
-        val state = remember { AppState() }
 
         val nfcReader = remember { NfcReader() }
         val service = remember { DesfireNdefService(nfcReader) }
@@ -67,7 +66,7 @@ fun App() {
                 baseUrlMenuExpanded = state.baseUrlMenuExpanded,
                 onBaseUrlMenuExpandedChange = { state.baseUrlMenuExpanded = it },
                 onBaseUrlSelected = {
-                    state.baseUrl = it
+                    state.setBaseUrl(it)
                     state.baseUrlMenuExpanded = false
                 },
                 protectOptions = state.protectOptions,
@@ -107,24 +106,24 @@ fun App() {
                             state.observationValue2Text = ""
                             state.showAddObservationDialog = true
                         },
-                        onInspectCard = {  actions.inspectCard()  },
+                        onInspectCard = { actions.inspectCard() },
                         onSyncCard = { actions.syncCard() },
-                        onReadNps = { actions.readNps()  },
+                        onReadNps = { actions.readNps() },
                         onReadExtra = { actions.readExtra() },
-                        onWriteExtra = {  actions.writeExtra() },
-                        onApplyApiUpdate = {  actions.applyApiUpdate()  }
+                        onWriteExtra = { actions.writeExtra() },
+                        onApplyApiUpdate = { actions.applyApiUpdate() }
                     )
                 }
 
                 Column(modifier = Modifier.weight(8f)) {
                     CardAdminSection(
-                        onRebuildCard = {  actions.rebuildCard()  },
+                        onRebuildCard = { actions.rebuildCard() },
                         onRebuildLegacyCard = { actions.rebuildLegacyCard() },
                         onCancelRebuild = {
                             state.clearRebuildConfirmation()
                             state.succeedOperation("Rebuild Card", "Rebuild confirmation cleared.")
                         },
-                        onWipeCard = { actions.wipeCard()  }
+                        onWipeCard = { actions.wipeCard() }
                     )
                 }
 
