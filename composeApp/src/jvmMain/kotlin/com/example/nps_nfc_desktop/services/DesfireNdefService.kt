@@ -59,14 +59,14 @@ data class CardInspection(
             appendLine("Source: Legacy single NDEF payload")
             appendLine("MIME: application/x.ips.gzip.v1-0")
             appendLine("Compressed bytes: ${nps?.compressedPayload?.size ?: 0}")
-            appendLine("JSON:")
-            appendLine(legacySplit.roJson)
+//            appendLine("JSON:")
+//            appendLine(legacySplit.roJson)
 
             appendLine()
             appendLine("--- E105 / EXTRA (derived from legacy payload) ---")
             appendLine("Source: Legacy single NDEF payload")
-            appendLine("JSON:")
-            appendLine(legacySplit.rwJson)
+//            appendLine("JSON:")
+//            appendLine(legacySplit.rwJson)
         } else {
             appendLine()
             appendLine("--- E104 / NPS ---")
@@ -75,8 +75,8 @@ data class CardInspection(
             } else {
                 appendLine("MIME: ${nps.mimeType}")
                 appendLine("Compressed bytes: ${nps.compressedPayload.size}")
-                appendLine("JSON:")
-                appendLine(nps.decompressedText ?: "(not gzip or not decoded)")
+//                appendLine("JSON:")
+//                appendLine(nps.decompressedText ?: "(not gzip or not decoded)")
             }
 
             appendLine()
@@ -86,8 +86,8 @@ data class CardInspection(
             } else {
                 appendLine("MIME: ${extra.mimeType}")
                 appendLine("Compressed bytes: ${extra.compressedPayload.size}")
-                appendLine("JSON:")
-                appendLine(extra.decompressedText ?: "(not gzip or not decoded)")
+//                appendLine("JSON:")
+//                appendLine(extra.decompressedText ?: "(not gzip or not decoded)")
             }
         }
     }.trim()
@@ -352,7 +352,33 @@ class DesfireNdefService(
     fun inspectCard(onStatus: (String) -> Unit): CardInspection {
         return reader.withFirstCard(onStatus) { session ->
             val uid = tryGetUid(session, onStatus)
-            selectNdefApplication(session, onStatus)
+
+            try {
+                selectNdefApplication(session, onStatus)
+            } catch (e: IllegalArgumentException) {
+                val msg = e.message ?: ""
+                if (msg.contains("SW=6A82")) {
+                    onStatus("NDEF application not present; card appears blank or unformatted.")
+                    return@withFirstCard CardInspection(
+                        readerName = session.readerName,
+                        protocol = session.protocol,
+                        atrHex = session.atrHex,
+                        uidHex = uid,
+                        ccFileHex = null,
+                        ccSummary = null,
+                        nps = null,
+                        extra = null,
+                        state = CardState(
+                            kind = CardStateKind.BLANK_OR_UNFORMATTED,
+                            label = "Blank / unformatted",
+                            detail = "NDEF application not present",
+                            allowOverwriteForDemo = true
+                        )
+                    )
+                } else {
+                    throw e
+                }
+            }
 
             val ccBytes = tryReadCcFile(session, onStatus)
             val ccSummary = ccBytes?.let { summarizeCc(it) }

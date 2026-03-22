@@ -13,6 +13,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import com.example.nps_nfc_desktop.util.LegacyIpsBundleUtils
 
 class SyncActions(
     scope: CoroutineScope,
@@ -42,9 +43,17 @@ class SyncActions(
                 val serverFailures = mutableListOf<String>()
 
                 val inspection = readCardIfPresent()
-                val cardNpsJson = inspection?.nps?.decompressedText
-                val cardExtraJson = inspection?.extra?.decompressedText ?: ""
-                val cardAvailable = cardNpsJson != null || cardExtraJson.isNotBlank()
+
+                val legacySplit = inspection?.let {
+                    LegacyIpsBundleUtils.splitLegacyBundleIfNeeded(
+                        mimeType = it.nps?.mimeType,
+                        decompressedText = it.nps?.decompressedText
+                    )
+                }
+
+                val cardNpsJson = legacySplit?.roJson ?: inspection?.nps?.decompressedText
+                val cardExtraJson = legacySplit?.rwJson ?: inspection?.extra?.decompressedText.orEmpty()
+                val cardAvailable = !cardNpsJson.isNullOrBlank() || cardExtraJson.isNotBlank()
 
                 var bundleId =
                     parseBundleSummary(cardNpsJson)?.bundleId
@@ -159,9 +168,12 @@ class SyncActions(
                         ?: ""
 
                 withContext(Dispatchers.Main) {
+                    state.cardWasLegacy = legacySplit != null
+                    state.currentCardRoJson = cardNpsJson ?: ""
                     state.cardInfoText = buildString {
                         appendLine("Sync complete for bundle: $bundleId")
                         appendLine("Card available: $cardAvailable")
+                        appendLine("Card format: ${if (legacySplit != null) "Legacy single-record (normalized to RO/RW)" else "Standard split RO/RW"}")
                         appendLine("Reachable servers: ${finalServerResults.size}/${syncTargets.size}")
                         appendLine("Desktop RW entries: ${countBundleEntries(desktopRwJsonSnapshot)}")
                         appendLine("Card RW entries: $cardRwCount")

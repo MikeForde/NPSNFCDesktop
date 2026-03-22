@@ -224,7 +224,7 @@ class DesfireAdminService(
             require(writeStandardFileSlice(desfire, 0x02, 0, byteArrayOf(0x00, 0x00))) {
                 "Pre-clear E104 NLEN failed."
             }
-            require(writeStandardFileSlice(desfire, 0x02, 0, npsFileBytes)) {
+            require(writeStandardFileSlice(desfire, 0x02, 0, npsFileBytes, onStatus = onStatus)) {
                 "Writing E104 failed."
             }
 
@@ -232,7 +232,7 @@ class DesfireAdminService(
             require(writeStandardFileSlice(desfire, 0x03, 0, byteArrayOf(0x00, 0x00))) {
                 "Pre-clear E105 NLEN failed."
             }
-            require(writeStandardFileSlice(desfire, 0x03, 0, extraFileBytes)) {
+            require(writeStandardFileSlice(desfire, 0x03, 0, extraFileBytes, onStatus = onStatus)) {
                 "Writing E105 failed."
             }
 
@@ -266,7 +266,7 @@ class DesfireAdminService(
         )
     }
 
-    private fun writeStandardFileSlice(
+    private fun writeStandardFileChunk(
         desfire: DESFireEV1,
         fileNo: Int,
         offset: Int,
@@ -283,6 +283,26 @@ class DesfireAdminService(
         payload[6] = ((len shr 16) and 0xFF).toByte()
         System.arraycopy(data, 0, payload, 7, len)
         return desfire.writeData(payload)
+    }
+
+    private fun writeStandardFileSlice(
+        desfire: DESFireEV1,
+        fileNo: Int,
+        offset: Int,
+        data: ByteArray,
+        chunkSize: Int = 32,
+        onStatus: ((String) -> Unit)? = null
+    ): Boolean {
+        var pos = 0
+        while (pos < data.size) {
+            val end = minOf(pos + chunkSize, data.size)
+            val chunk = data.copyOfRange(pos, end)
+            onStatus?.invoke("Writing file ${"%02X".format(fileNo)} chunk offset=${offset + pos} len=${chunk.size}")
+            val ok = writeStandardFileChunk(desfire, fileNo, offset + pos, chunk)
+            if (!ok) return false
+            pos = end
+        }
+        return true
     }
 
     private fun sendNative(desfire: DESFireEV1, ins: Int, body: ByteArray = ByteArray(0)): ByteArray {

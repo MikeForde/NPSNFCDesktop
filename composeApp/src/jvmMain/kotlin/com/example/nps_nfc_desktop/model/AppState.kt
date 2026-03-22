@@ -24,7 +24,7 @@ class AppState {
     var operationTitle by mutableStateOf("Ready")
     var operationMessage by mutableStateOf("Tap an action to begin.")
 
-    var baseUrl by mutableStateOf("https://ipsmern-dep.azurewebsites.net")
+    var baseUrl by mutableStateOf("http://localhost:5049")
     val protectOptions = listOf(
         "0 - none",
         "1 - field-level encryption (JWE)",
@@ -61,7 +61,7 @@ class AppState {
     var observationValue2Text by mutableStateOf("")
 
     val baseUrlOptions = listOf(
-        "https://ipsmern-dep.azurewebsites.net",
+        //"https://ipsmern-dep.azurewebsites.net",
         "http://localhost:5049"
     )
 
