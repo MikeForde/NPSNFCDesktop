@@ -207,6 +207,7 @@ fun CardToolsSection(
 @Composable
 fun CardAdminSection(
     onRebuildCard: () -> Unit,
+    onRebuildLegacyCard: () -> Unit,
     onCancelRebuild: () -> Unit,
     onWipeCard: () -> Unit
 ) {
@@ -226,9 +227,10 @@ fun CardAdminSection(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Button(onClick = onRebuildCard) { Text("Rebuild Card") }
+                Button(onClick = onRebuildCard) { Text("Rebuild") }
+                Button(onClick = onRebuildLegacyCard) { Text("Rebuild Legacy") }
                 Button(onClick = onCancelRebuild) { Text("Cancel Rebuild") }
-                Button(onClick = onWipeCard) { Text("Wipe Card") }
+                Button(onClick = onWipeCard) { Text("Wipe") }
             }
         }
     }

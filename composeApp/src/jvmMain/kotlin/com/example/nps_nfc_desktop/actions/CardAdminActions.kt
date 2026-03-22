@@ -19,6 +19,88 @@ class CardAdminActions(
     private val adminService: DesfireAdminService
 ) : ActionSupport(scope, state) {
 
+    fun rebuildLegacyCard() {
+        state.startOperation("Rebuild Legacy Card", "Waiting for card...")
+        scope.launch(Dispatchers.IO) {
+            try {
+                require(state.fetchedRoJson.isNotBlank()) { "No fetched RO record available. Fetch an API record first." }
+                require(state.fetchedRwJson.isNotBlank()) { "No fetched RW record available. Fetch an API record first." }
+
+                val inspection = try {
+                    service.inspectCard { msg -> log(msg) }
+                } catch (e: Exception) {
+                    val msg = e.message ?: ""
+                    if (msg.contains("SW=6A82")) null else throw e
+                }
+
+                val isBlank = inspection == null ||
+                        inspection.state.kind == CardStateKind.BLANK_OR_UNFORMATTED
+
+                val sameCardAwaitingConfirmation =
+                    inspection != null &&
+                            state.pendingRebuildConfirmation &&
+                            state.pendingRebuildUid != null &&
+                            state.pendingRebuildUid == inspection.uidHex
+
+                if (!isBlank && !sameCardAwaitingConfirmation) {
+                    withContext(Dispatchers.Main) {
+                        state.pendingRebuildConfirmation = true
+                        state.pendingRebuildUid = inspection?.uidHex
+                        state.pendingRebuildSummary = buildString {
+                            appendLine("UID: ${inspection?.uidHex ?: "(unknown)"}")
+                            appendLine("State: ${inspection?.state?.label ?: "(unknown)"}")
+                            appendLine("Detail: ${inspection?.state?.detail ?: "(none)"}")
+                        }.trim()
+
+                        state.cardInfoText = buildString {
+                            appendLine("Legacy rebuild confirmation required.")
+                            appendLine()
+                            appendLine(state.pendingRebuildSummary)
+                            appendLine()
+                            appendLine("Press 'Rebuild Legacy Card' again to overwrite this card.")
+                        }.trim()
+
+                        state.selectedTab = MainTab.CARD_INFO
+                        state.operationState = OperationState.WORKING
+                        state.operationTitle = "Rebuild Legacy Card"
+                        state.operationMessage =
+                            "Card is not blank. Press 'Rebuild Legacy Card' again to confirm overwrite."
+                        state.log("Rebuild Legacy Card: confirmation required for non-blank card.")
+                    }
+                    return@launch
+                }
+
+                val result = adminService.rebuildLegacyCard(
+                    roJson = state.fetchedRoJson,
+                    rwJson = state.fetchedRwJson,
+                    onStatus = { msg -> log(msg) }
+                )
+
+                withContext(Dispatchers.Main) {
+                    state.cardInfoText = result.toDisplayText()
+                    state.payloadText = buildString {
+                        appendLine("--- RO candidate written using legacy method ---")
+                        appendLine(prettyPrintJson(state.fetchedRoJson))
+                        appendLine()
+                        appendLine("--- RW candidate written using legacy method ---")
+                        appendLine(prettyPrintJson(state.fetchedRwJson))
+                    }.trim()
+                    state.payloadEditable = prettyPrintJson(state.fetchedRwJson)
+
+                    state.clearRebuildConfirmation()
+
+                    state.selectedTab = MainTab.CARD_INFO
+                    state.succeedOperation("Rebuild Legacy Card", "Legacy card rebuild completed successfully.")
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    state.selectedTab = MainTab.LOG
+                    state.failOperation("Rebuild Legacy Card", "${e::class.simpleName}: ${e.message}")
+                }
+            }
+        }
+    }
+
     fun rebuildCard() {
         state.startOperation("Rebuild Card", "Waiting for card...")
         scope.launch(Dispatchers.IO) {

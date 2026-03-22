@@ -99,7 +99,7 @@ fun App() {
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalAlignment = Alignment.Top
             ) {
-                Column(modifier = Modifier.weight(4f)) {
+                Column(modifier = Modifier.weight(9f)) {
                     CardToolsSection(
                         onAddObservation = {
                             state.selectedObservationType = ObservationEntryType.BLOOD_PRESSURE
@@ -116,9 +116,10 @@ fun App() {
                     )
                 }
 
-                Column(modifier = Modifier.weight(3f)) {
+                Column(modifier = Modifier.weight(8f)) {
                     CardAdminSection(
                         onRebuildCard = {  actions.rebuildCard()  },
+                        onRebuildLegacyCard = { actions.rebuildLegacyCard() },
                         onCancelRebuild = {
                             state.clearRebuildConfirmation()
                             state.succeedOperation("Rebuild Card", "Rebuild confirmation cleared.")

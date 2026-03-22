@@ -68,6 +68,7 @@ class AppActions(
     fun applyApiUpdate() = cardDataActions.applyApiUpdate()
 
     fun rebuildCard() = cardAdminActions.rebuildCard()
+    fun rebuildLegacyCard() = cardAdminActions.rebuildLegacyCard()
     fun cancelRebuild() = cardAdminActions.cancelRebuild()
     fun wipeCard() = cardAdminActions.wipeCard()
 }
