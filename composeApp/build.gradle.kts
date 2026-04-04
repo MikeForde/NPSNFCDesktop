@@ -10,6 +10,9 @@ plugins {
 
 kotlin {
     jvm()
+    
+    // Force the project to use JDK 21 toolchain
+    jvmToolchain(21)
 
     sourceSets {
         commonMain.dependencies {
@@ -21,26 +24,33 @@ kotlin {
             implementation(libs.compose.uiToolingPreview)
             implementation(libs.androidx.lifecycle.viewmodelCompose)
             implementation(libs.androidx.lifecycle.runtimeCompose)
+            implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
         }
         commonTest.dependencies {
-            implementation(libs.kotlin.test)
+            implementation(kotlin("test"))
+        }
+        jvmTest.dependencies {
+            implementation(kotlin("test"))
         }
         jvmMain.dependencies {
             implementation(compose.desktop.currentOs)
             implementation(libs.kotlinx.coroutinesSwing)
-            implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
         }
     }
 }
 
 tasks.withType<KotlinJvmCompile>().configureEach {
     compilerOptions {
-        freeCompilerArgs.add("-Xjdk-release=21")
+        // Removed -Xjdk-release=21 as jvmToolchain(21) handles this more robustly
         freeCompilerArgs.add("-Xadd-modules=java.smartcardio")
     }
 }
 
 tasks.withType<JavaExec>().configureEach {
+    jvmArgs("--add-modules=java.smartcardio")
+}
+
+tasks.withType<Test>().configureEach {
     jvmArgs("--add-modules=java.smartcardio")
 }
 
